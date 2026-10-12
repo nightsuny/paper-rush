@@ -44,7 +44,7 @@ export class Results {
       <div class="paper panel" style="position:relative">
         <div class="paper__sheet"></div>
         <div class="paper__content" style="padding:2em 2.4em">
-          <div class="kicker">${session.centerline.config.name} · ${session.totalLaps} 圈</div>
+          <div class="kicker">${session.trackName} · ${session.totalLaps} 圈</div>
           <div class="stamp stamp--lg">${headline}</div>
           <div class="sub" style="margin-top:0.4em">车手 ${playerName}</div>
           <div class="hand-line" style="margin:1.1em 0"></div>
@@ -83,13 +83,13 @@ export class PauseOverlay {
         <div class="paper__sheet"></div>
         <div class="paper__content" style="padding:1.8em 2.2em">
           <div class="stamp stamp--md">暂停</div>
-          <div class="sub" style="margin-top:0.5em">物理与计时已经停止。</div>
+          <div class="sub" style="margin-top:0.5em">物理与探索计时已经停止。</div>
           <div class="panel__actions">
             <button class="btn btn--primary" data-resume>继续 <span class="btn__key">Esc</span></button>
-            <button class="btn" data-again>重新开始 <span class="btn__key">R</span></button>
+            <button class="btn" data-again>回到出生点 <span class="btn__key">R</span></button>
             <button class="btn" data-menu>返回主菜单</button>
           </div>
-          <div class="sub" style="margin-top:1em;font-size:0.9em">提示：比赛中按 R 会把车送回最近通过的检查点，不会重置成绩。</div>
+          <div class="sub" style="margin-top:1em;font-size:0.9em">提示：按 R 会把车送回本区域的出生点。</div>
         </div>
       </div>
     `;

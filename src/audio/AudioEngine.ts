@@ -215,7 +215,7 @@ export class AudioEngine {
    * 每帧更新连续音源。传 dt（渲染帧时间）而不是物理步长。
    * 注意：这里只做参数平滑，不做节点创建，开销很低。
    */
-  update(dt: number, car: Car, session: RaceSession): void {
+  update(dt: number, car: Car, session?: RaceSession | null): void {
     if (!this.ctx || this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime;
     const tel = car.telemetry;

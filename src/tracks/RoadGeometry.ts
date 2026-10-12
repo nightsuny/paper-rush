@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import type { Centerline, CenterlineSample } from './Centerline';
-import type { TrackConfig } from './types';
 
 /**
  * 道路几何生成。
@@ -45,6 +44,19 @@ export interface RibbonData {
   indices: Uint32Array;
 }
 
+/**
+ * 生成路面几何所需的最小配置。
+ * `TrackConfig`（闭合赛道）与 `RoadSegmentConfig`（开放路段）都能折算成它，
+ * 因此闭合赛道与路网路段共用同一条几何生成路径。
+ */
+export interface RoadGeometrySpec {
+  /** 路面全宽（不含路肩） */
+  width: number;
+  paperThickness: number;
+  /** 是否闭合曲线 */
+  closed: boolean;
+}
+
 export interface RoadGeometryResult {
   /** 路面（沥青纸）条带 */
   road: RibbonData;
@@ -66,7 +78,7 @@ export interface RoadGeometryResult {
   totalLength: number;
 }
 
-function makeProfile(config: TrackConfig): RoadProfile {
+function makeProfile(config: { width: number; paperThickness: number }): RoadProfile {
   return {
     halfWidth: config.width / 2,
     kerbWidth: 0.9,
@@ -89,6 +101,12 @@ function buildRibbon(
   uAcross: number[],
   vRepeatMeters: number,
   closed: boolean,
+  /**
+   * 超高（bank）的作用范围上限（米）。超过这个横向距离的断面点，
+   * 其高度按"路面平面"计算而不跟随超高 —— 否则宽度十几米的路堤外沿
+   * 会被超高抬起近 1 米，直接高过路面形成一道墙。
+   */
+  bankCap = Number.POSITIVE_INFINITY,
 ): RibbonData {
   const n = samples.length;
   const p = profile.length;
@@ -103,8 +121,10 @@ function buildRibbon(
     for (let j = 0; j < p; j++) {
       const off = profile[j];
       const idx = (i * p + j) * 3;
+      // 横向位置用完整的 lateral；高度只用夹紧后的 lateral（超高不外溢）
+      const latForY = Math.max(-bankCap, Math.min(bankCap, off.lateral));
       positions[idx] = s.x + s.rx * off.lateral + s.ux * off.dy;
-      positions[idx + 1] = s.y + s.ry * off.lateral + s.uy * off.dy;
+      positions[idx + 1] = s.y + s.ry * latForY + s.uy * off.dy;
       positions[idx + 2] = s.z + s.rz * off.lateral + s.uz * off.dy;
       const uv = (i * p + j) * 2;
       uvs[uv] = uAcross[j];
@@ -140,10 +160,10 @@ function toTrimesh(ribbon: RibbonData): { vertices: Float32Array; indices: Uint3
 }
 
 export function buildRoadGeometry(
-  config: TrackConfig,
+  spec: RoadGeometrySpec,
   centerline: Centerline,
 ): RoadGeometryResult {
-  const profile = makeProfile(config);
+  const profile = makeProfile(spec);
   const hw = profile.halfWidth;
   const kw = profile.kerbWidth;
   const kh = profile.kerbHeight;
@@ -179,22 +199,26 @@ export function buildRoadGeometry(
   const roadHalf = hw - kwIn;
   const u = (lat: number) => (lat + roadHalf) / (2 * roadHalf);
 
+  const closed = spec.closed;
+
   const road = buildRibbon(
     samples,
     [full[2], full[3], full[4]],
     [u(full[2].lateral), u(full[3].lateral), u(full[4].lateral)],
     vRepeat,
-    true,
+    closed,
+    hw,
   );
-  const kerbLeft = buildRibbon(samples, [full[1], full[2]], [0, 1], 3, true);
-  const kerbRight = buildRibbon(samples, [full[4], full[5]], [0, 1], 3, true);
+  const kerbLeft = buildRibbon(samples, [full[1], full[2]], [0, 1], 3, closed, hw);
+  const kerbRight = buildRibbon(samples, [full[4], full[5]], [0, 1], 3, closed, hw);
   // 路堤过渡坡（草地），把路肩外沿平顺接到路堤面
-  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 4, true);
-  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 4, true);
+  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 4, closed, hw);
+  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 4, closed, hw);
 
-  // 碰撞面：整个断面（含路肩与过渡坡），连续无孔洞、无台坎
+  // 碰撞面：整个断面（含路肩与过渡坡），连续无孔洞、无台坎。
+  // 超高只作用到路面半宽，外侧地面保持水平 —— 这是可驾驶性的关键。
   const collision = toTrimesh(
-    buildRibbon(samples, full, [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1], vRepeat, true),
+    buildRibbon(samples, full, [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1], vRepeat, closed, hw),
   );
   // 路堤：过渡坡外沿 → 平铺纸带 → 收边，形成"纸板赛道压在一张桌子上"的边缘
   const apronOuter = profile.apronDrop;
@@ -213,7 +237,8 @@ export function buildRoadGeometry(
     ],
     [0, 0.2, 0.9, 1],
     8,
-    true,
+    closed,
+    hw,
   );
   const apronRight = buildRibbon(
     samples,
@@ -225,7 +250,8 @@ export function buildRoadGeometry(
     ],
     [0, 0.1, 0.8, 1],
     8,
-    true,
+    closed,
+    hw,
   );
   const apronCollisionBand = [
     { lateral: -(apronInnerLat + apronFar), dy: -apronEnd },
@@ -237,8 +263,8 @@ export function buildRoadGeometry(
     { lateral: apronInnerLat + profile.apronWidth, dy: -apronOuter },
     { lateral: apronInnerLat + apronFar, dy: -apronEnd },
   ];
-  const a1 = toTrimesh(buildRibbon(samples, apronCollisionBand, [0, 0.8, 1], 8, true));
-  const a2 = toTrimesh(buildRibbon(samples, apronCollisionBandRight, [0, 0.2, 1], 8, true));
+  const a1 = toTrimesh(buildRibbon(samples, apronCollisionBand, [0, 0.8, 1], 8, closed, hw));
+  const a2 = toTrimesh(buildRibbon(samples, apronCollisionBandRight, [0, 0.2, 1], 8, closed, hw));
   const apronVerts = new Float32Array(a1.vertices.length + a2.vertices.length);
   apronVerts.set(a1.vertices, 0);
   apronVerts.set(a2.vertices, a1.vertices.length);
@@ -301,7 +327,33 @@ export interface GuardrailData {
   }>;
 }
 
-export function buildGuardrails(config: TrackConfig, centerline: Centerline): GuardrailData {
+export interface GuardrailRunSpec {
+  from: number;
+  to: number;
+  side: 'left' | 'right' | 'both';
+  offset: number;
+}
+
+export interface GuardrailBuildSpec {
+  runs: GuardrailRunSpec[];
+  /** 曲线是否闭合（开放路段不用回绕逻辑） */
+  closed: boolean;
+  /**
+   * 抑制区间（段内 0..1）。落在其中的立柱与栏板不生成。
+   * 用途：路口与路段端头必须没有护栏，否则护栏会横穿另一条路，把路堵死。
+   */
+  suppress?: Array<{ from: number; to: number }>;
+}
+
+/** 判断 t 是否落在任一抑制区间内（不跨越 0/1 边界，供开放路段使用）。 */
+function isSuppressed(t: number, ranges: Array<{ from: number; to: number }>): boolean {
+  for (const r of ranges) {
+    if (t >= r.from && t <= r.to) return true;
+  }
+  return false;
+}
+
+export function buildGuardrails(config: GuardrailBuildSpec, centerline: Centerline): GuardrailData {
   const total = centerline.totalLength;
   const samples = centerline.samples;
   const n = samples.length;
@@ -314,22 +366,30 @@ export function buildGuardrails(config: TrackConfig, centerline: Centerline): Gu
   const rotations: number[] = [];
   const boxes: GuardrailData['boxes'] = [];
 
+  const closed = config.closed;
   const idxForT = (t: number) => {
-    const tt = ((t % 1) + 1) % 1;
+    const tt = closed ? ((t % 1) + 1) % 1 : Math.min(Math.max(t, 0), 1);
     return Math.min(n - 1, Math.max(0, Math.round(tt * n)));
   };
+  const tOfIdx = (i: number) => i / n;
 
   const sides: Array<'left' | 'right'> = [];
-  for (const g of config.guardrails) {
+  for (const g of config.runs) {
     const list: Array<'left' | 'right'> = g.side === 'both' ? ['left', 'right'] : [g.side];
     for (const side of list) {
       sides.push(side);
       const i0 = idxForT(g.from);
       const i1 = idxForT(g.to);
-      const spanIdx = i1 > i0 ? i1 - i0 : n - i0 + i1;
+      const spanIdx = closed
+        ? i1 > i0
+          ? i1 - i0
+          : n - i0 + i1
+        : Math.max(i1 - i0, 0);
       const step = Math.max(1, Math.round(postSpacing / (total / n)));
+      const suppress = config.suppress ?? [];
       for (let k = 0; k <= spanIdx; k += step) {
-        const i = (i0 + k) % n;
+        const i = closed ? (i0 + k) % n : Math.min(i0 + k, n - 1);
+        if (suppress.length > 0 && isSuppressed(tOfIdx(i), suppress)) continue;
         const s = samples[i];
         const sign = side === 'right' ? 1 : -1;
         const lateral = sign * g.offset;
@@ -341,8 +401,11 @@ export function buildGuardrails(config: TrackConfig, centerline: Centerline): Gu
       }
       // 碰撞盒：按 4 米一段铺设
       for (let k = 0; k < spanIdx; k += step) {
-        const i = (i0 + k) % n;
-        const j = (i0 + Math.min(k + step, spanIdx)) % n;
+        const i = closed ? (i0 + k) % n : Math.min(i0 + k, n - 1);
+        const j = closed
+          ? (i0 + Math.min(k + step, spanIdx)) % n
+          : Math.min(i0 + Math.min(k + step, spanIdx), n - 1);
+        if (suppress.length > 0 && isSuppressed(tOfIdx(i), suppress)) continue;
         const a = samples[i];
         const b = samples[j];
         const sign = side === 'right' ? 1 : -1;

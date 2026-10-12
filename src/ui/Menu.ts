@@ -1,13 +1,23 @@
-import type { TrackConfig } from '../tracks/types';
-import type { ValidationReport } from '../tracks/validate';
-import { deriveVehicle } from '../vehicles/VehicleSpec';
-import { STOCK_KART } from '../vehicles/vehicleCatalog';
 import { DRIVERS, type DriverSpecies } from '../vehicles/CarVisual';
 import { DEFAULT_AUDIO_SETTINGS, type AudioSettings } from '../audio/AudioEngine';
 
 export interface MenuSettings {
   quality: 'high' | 'low';
   showDebug: boolean;
+}
+
+/** 菜单需要展示的区域信息（与具体数据结构解耦，便于将来加区域）。 */
+export interface MenuRegionInfo {
+  chapter: number;
+  name: string;
+  subtitle: string;
+  difficulty: number;
+  roadLengthMeters: number;
+  segmentCount: number;
+  gateCount: number;
+  junctionCount: number;
+  minimapPolylines: Array<{ points: Array<{ x: number; z: number }>; closed: boolean }>;
+  minimapBounds: { minX: number; minZ: number; maxX: number; maxZ: number };
 }
 
 export interface MenuCallbacks {
@@ -22,33 +32,24 @@ export interface MenuCallbacks {
 const DRIVER_ORDER: DriverSpecies[] = ['bear', 'cat', 'rabbit', 'fox'];
 
 /**
- * 主菜单。
- *
- * 设计取舍：菜单只放"做决定所需要的信息"——这是什么赛道、要跑多久、
- * 车手什么样子、画质怎么选。整车参数表那种高密度数据搬到调试面板（F3），
- * 否则一屏全是数字，既不好看也读不完。
+ * 主菜单（开放世界版）。
+ * 只放"做决定所需要的信息"：这是哪个区域、有多大、怎么开、车手长什么样。
  */
 export class Menu {
   readonly root: HTMLDivElement;
   private settings: MenuSettings;
   private driver: DriverSpecies = 'bear';
-  private readonly track: TrackConfig;
-  private readonly stats: ValidationReport['stats'] | null;
-  private readonly minimapPoints: ReadonlyArray<{ x: number; z: number }>;
   private audio: AudioSettings = { ...DEFAULT_AUDIO_SETTINGS };
+  private readonly info: MenuRegionInfo;
   private bound = false;
 
   constructor(
-    track: TrackConfig,
-    stats: ValidationReport['stats'] | null,
-    minimapPoints: ReadonlyArray<{ x: number; z: number }>,
+    info: MenuRegionInfo,
     initialSettings: MenuSettings,
     initialAudio: AudioSettings,
     private readonly cb: MenuCallbacks,
   ) {
-    this.track = track;
-    this.stats = stats;
-    this.minimapPoints = minimapPoints;
+    this.info = info;
     this.settings = { ...initialSettings };
     this.audio = { ...initialAudio };
     this.root = document.createElement('div');
@@ -68,18 +69,20 @@ export class Menu {
     return this.driver;
   }
 
-  /** 外部改动设置后刷新选中态（不重建 DOM）。 */
   refresh(): void {
     this.syncSelection();
   }
 
+  setAudioSettings(next: AudioSettings): void {
+    this.audio = { ...next };
+    this.syncSelection();
+  }
+
   private build(): void {
-    const spec = STOCK_KART;
-    const derived = deriveVehicle(spec);
-    const lengthM = this.stats?.length ?? 0;
-    const estSeconds = lengthM > 0 ? (lengthM / 22) * this.track.laps : 0;
-    const estText =
-      estSeconds > 0 ? `${Math.floor(estSeconds / 60)} 分 ${Math.round(estSeconds % 60)} 秒` : '—';
+    const info = this.info;
+    const km = info.roadLengthMeters / 1000;
+    // 按 45 km/h 巡航粗估绕完全区的时间
+    const driveMinutes = (info.roadLengthMeters / 1000 / 45) * 60;
 
     const driverCards = DRIVER_ORDER.map((key) => {
       const d = DRIVERS[key];
@@ -96,11 +99,11 @@ export class Menu {
         <div class="paper menu__hero">
           <div class="paper__sheet"></div>
           <div class="paper__content">
-            <div class="kicker">纯代码生成 · 纸艺赛车</div>
+            <div class="kicker">开放世界 · 纸艺驾驶</div>
             <h1 class="stamp menu__title">纸上狂飙</h1>
             <div class="menu__sub">PAPER&nbsp;RUSH</div>
             <button class="btn btn--primary menu__start" data-start type="button">
-              开始计时赛 <span class="btn__key">Enter</span>
+              开始探索 <span class="btn__key">Enter</span>
             </button>
           </div>
         </div>
@@ -114,7 +117,7 @@ export class Menu {
               <li><kbd>S</kbd><span>刹车 / 倒车</span></li>
               <li><kbd>A</kbd><kbd>D</kbd><span>转向</span></li>
               <li><kbd>空格</kbd><span>手刹漂移</span></li>
-              <li><kbd>R</kbd><span>回到检查点</span></li>
+              <li><kbd>R</kbd><span>回到出生点</span></li>
               <li><kbd>Esc</kbd><span>暂停</span></li>
               <li><kbd>C</kbd><span>切换镜头</span></li>
               <li><kbd>F3</kbd><span>调试面板</span></li>
@@ -129,18 +132,21 @@ export class Menu {
           <div class="paper__content">
             <div class="menu__track-head">
               <div class="menu__track-text">
-                <div class="kicker">第 ${this.track.chapter} 章</div>
-                <div class="stamp stamp--md">${this.track.name}</div>
-                <div class="sub">${this.track.subtitle}</div>
+                <div class="kicker">区域 ${info.chapter}</div>
+                <div class="stamp stamp--md">${info.name}</div>
+                <div class="sub">${info.subtitle}</div>
               </div>
               <canvas class="menu__shape" data-shape width="140" height="140"></canvas>
             </div>
             <div class="hand-line" style="margin:0.9em 0 0.8em"></div>
             <div class="stat-row">
-              <div class="stat"><b>${lengthM.toFixed(0)}</b><span>米</span><em>赛道长度</em></div>
-              <div class="stat"><b>${this.track.laps}</b><span>圈</span><em>赛程</em></div>
-              <div class="stat"><b>${estText}</b><em>预计用时</em></div>
-              <div class="stat"><b class="stars">${'★'.repeat(this.track.difficulty)}${'☆'.repeat(5 - this.track.difficulty)}</b><em>难度</em></div>
+              <div class="stat"><b>${km.toFixed(1)}</b><span>km</span><em>路网总长</em></div>
+              <div class="stat"><b>${info.segmentCount}</b><span>段</span><em>路段数</em></div>
+              <div class="stat"><b>${info.junctionCount}</b><span>处</span><em>路口 / 环岛</em></div>
+              <div class="stat"><b>${Math.round(driveMinutes)}</b><span>分</span><em>绕完全区约</em></div>
+            </div>
+            <div class="fps-note menu__note">
+              有 ${info.gateCount} 个通往下一区域的闸口；下一区尚未开放，边界处是不可见墙
             </div>
           </div>
         </div>
@@ -182,9 +188,6 @@ export class Menu {
                 <button data-d="on" type="button">开</button>
                 <button data-d="off" type="button">关</button>
               </span>
-            </div>
-            <div class="fps-note menu__note">
-              ${spec.name}　${spec.mass} kg　${(spec.engineMaxPower / 1000).toFixed(0)} kW　红线极速 ${(derived.theoreticalTopSpeed * 3.6).toFixed(0)} km/h
             </div>
           </div>
         </div>
@@ -230,7 +233,6 @@ export class Menu {
     });
     this.root.querySelectorAll('[data-audio]').forEach((el) => {
       const input = el as HTMLInputElement;
-      input.value = String(Math.round(this.audio[input.dataset.audio as 'music' | 'sfx'] * 100));
       input.addEventListener('input', () => {
         const key = input.dataset.audio as 'music' | 'sfx';
         this.audio[key] = Number(input.value) / 100;
@@ -239,13 +241,6 @@ export class Menu {
     });
   }
 
-  /** 外部（如 M 键）改变静音状态后同步界面。 */
-  setAudioSettings(next: AudioSettings): void {
-    this.audio = { ...next };
-    this.syncSelection();
-  }
-
-  /** 只切换选中态，不重建 DOM（重建会丢焦点，也更容易闪）。 */
   private syncSelection(): void {
     this.root.querySelectorAll('[data-driver]').forEach((el) => {
       const active = (el as HTMLElement).dataset.driver === this.driver;
@@ -270,7 +265,7 @@ export class Menu {
     });
   }
 
-  /** 用真实中心线数据把赛道形状画成一张小图。 */
+  /** 用真实路网数据画一张区域形状缩略图。 */
   private drawShape(): void {
     const canvas = this.root.querySelector('[data-shape]') as HTMLCanvasElement | null;
     if (!canvas) return;
@@ -279,49 +274,29 @@ export class Menu {
     const w = canvas.width;
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
-    const pts = this.minimapPoints;
-    if (pts.length < 3) return;
-
-    let minX = Infinity;
-    let minZ = Infinity;
-    let maxX = -Infinity;
-    let maxZ = -Infinity;
-    for (const p of pts) {
-      minX = Math.min(minX, p.x);
-      minZ = Math.min(minZ, p.z);
-      maxX = Math.max(maxX, p.x);
-      maxZ = Math.max(maxZ, p.z);
-    }
-    const span = Math.max(maxX - minX, maxZ - minZ, 1e-6);
-    const pad = 16;
+    const b = this.info.minimapBounds;
+    const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ, 1e-6);
+    const pad = 14;
     const s = (w - pad * 2) / span;
-    const ox = (w - (maxX - minX) * s) / 2 - minX * s;
-    const oz = (h - (maxZ - minZ) * s) / 2 - minZ * s;
-
-    const path = new Path2D();
-    pts.forEach((p, i) => {
-      const x = p.x * s + ox;
-      const y = p.z * s + oz;
-      if (i === 0) path.moveTo(x, y);
-      else path.lineTo(x, y);
-    });
-    path.closePath();
+    const ox = (w - (b.maxX - b.minX) * s) / 2 - b.minX * s;
+    const oz = (h - (b.maxZ - b.minZ) * s) / 2 - b.minZ * s;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(201,189,162,0.85)';
-    ctx.lineWidth = 10;
-    ctx.stroke(path);
-    ctx.strokeStyle = '#35302a';
-    ctx.lineWidth = 2.8;
-    ctx.stroke(path);
-
-    const start = pts[0];
-    ctx.fillStyle = '#c33a2f';
-    ctx.beginPath();
-    ctx.arc(start.x * s + ox, start.z * s + oz, 4.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#f6f1e2';
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
+    for (const pl of this.info.minimapPolylines) {
+      const path = new Path2D();
+      pl.points.forEach((p, i) => {
+        const x = p.x * s + ox;
+        const y = p.z * s + oz;
+        if (i === 0) path.moveTo(x, y);
+        else path.lineTo(x, y);
+      });
+      if (pl.closed) path.closePath();
+      ctx.strokeStyle = 'rgba(201,189,162,0.85)';
+      ctx.lineWidth = 6;
+      ctx.stroke(path);
+      ctx.strokeStyle = '#35302a';
+      ctx.lineWidth = 1.8;
+      ctx.stroke(path);
+    }
   }
 }

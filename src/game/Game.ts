@@ -1,25 +1,23 @@
 import * as THREE from 'three';
-import { initPhysics, PhysicsWorld, PHYSICS_DT, RAPIER as R } from '../physics/PhysicsWorld';
-import { surfaceById } from '../physics/CollisionGroups';
-import { TrackBuilder, type BuiltTrack } from '../tracks/Track';
-import { validateTrack, type ValidationReport } from '../tracks/validate';
-import { MEADOW } from '../tracks/catalog/meadow';
+import { initPhysics, PhysicsWorld, PHYSICS_DT } from '../physics/PhysicsWorld';
+import { RegionBuilder, type BuiltRegion } from '../world/Region';
+import { REGION_SKELETON } from '../world/catalog/region1';
+import { WorldSession } from '../world/WorldSession';
+import { buildRegionView, type RegionView } from '../world/RegionView';
+import type { NetworkProjection } from '../world/RoadNetwork';
 import { Car } from '../vehicles/Car';
 import { STOCK_KART } from '../vehicles/vehicleCatalog';
 import { deriveVehicle, type DerivedVehicle } from '../vehicles/VehicleSpec';
-import { buildCarVisual, DRIVERS, type CarVisual, type DriverSpecies } from '../vehicles/CarVisual';
-import { buildTrackView, type TrackView } from '../scenery/TrackView';
-import { paperMaterial, paperTexture } from '../scenery/PaperMaterials';
-import { RaceSession } from '../race/RaceSession';
+import { buildCarVisual, type CarVisual, type DriverSpecies } from '../vehicles/CarVisual';
 import { Input } from './Input';
 import { ChaseCamera } from './ChaseCamera';
-import { Hud } from '../ui/Hud';
-import { Menu } from '../ui/Menu';
+import { WorldHud } from '../ui/WorldHud';
+import { Menu, type MenuRegionInfo } from '../ui/Menu';
 import { DebugPanel, type DebugStats } from '../ui/DebugPanel';
-import { PauseOverlay, Results } from '../ui/Results';
+import { PauseOverlay } from '../ui/Results';
 import { AudioEngine, DEFAULT_AUDIO_SETTINGS, type AudioSettings } from '../audio/AudioEngine';
 
-export type AppState = 'menu' | 'racing' | 'paused' | 'finished';
+export type AppState = 'menu' | 'driving' | 'paused';
 
 export interface QualitySettings {
   quality: 'high' | 'low';
@@ -32,11 +30,10 @@ const QUALITY_PRESETS = {
 } as const;
 
 /**
- * 游戏主循环与流程。
+ * 游戏主循环与流程（开放世界版）。
  *
- * 物理固定 60 Hz 步进，渲染帧率与物理解耦：
- *   累加真实帧时间 → 用固定步长消化 → 用剩余比例 alpha 对刚体位姿做插值渲染。
- * 因此 30fps 与 144fps 下车辆行为完全一致（相同输入 → 完全相同结果）。
+ * 物理固定 60 Hz 步进，渲染帧率与物理解耦：累加真实帧时间 → 用固定步长消化 →
+ * 用剩余比例 alpha 对刚体位姿做插值渲染。因此 30fps 与 200fps 下车辆行为完全一致。
  */
 export class Game {
   private readonly canvas: HTMLCanvasElement;
@@ -46,27 +43,23 @@ export class Game {
   private readonly input: Input;
   private readonly clock = new THREE.Clock();
   private readonly carMeshRoot = new THREE.Group();
-
-  private readonly world: PhysicsWorld;
-  private readonly track: BuiltTrack;
-  private readonly validation: ValidationReport;
-  private readonly derived: DerivedVehicle;
-  private readonly car: Car;
-  private readonly session: RaceSession;
-  private readonly trackView: TrackView;
-  private readonly chase: ChaseCamera;
-  private readonly sun: THREE.DirectionalLight;
-  private readonly turntable: THREE.Mesh;
-  private readonly turntableCollider: R.Collider;
-  private carVisual: CarVisual;
-
   private readonly audio = new AudioEngine();
   private audioSettings: AudioSettings = { ...DEFAULT_AUDIO_SETTINGS };
   private audioStarted = false;
-  private readonly hud: Hud;
+
+  private readonly world: PhysicsWorld;
+  private readonly region: BuiltRegion;
+  private readonly derived: DerivedVehicle;
+  private readonly car: Car;
+  private readonly session: WorldSession;
+  private readonly regionView: RegionView;
+  private readonly sun: THREE.DirectionalLight;
+  private readonly chase: ChaseCamera;
+  private carVisual: CarVisual;
+
+  private readonly hud: WorldHud;
   private readonly menu: Menu;
   private readonly debug: DebugPanel;
-  private readonly results: Results;
   private readonly pause: PauseOverlay;
 
   private settings: QualitySettings;
@@ -80,9 +73,9 @@ export class Game {
   private fpsAccum = 0;
   private fpsFrames = 0;
   private menuOrbit = 0;
-  private lastCountdownLabel = '';
   private readonly wheelRollVisual = [0, 0, 0, 0];
   private debugInput: { throttle: number; brake: number; steer: number; handbrake: boolean } | null = null;
+  private lastProjection: NetworkProjection;
   private disposed = false;
 
   private constructor(
@@ -91,16 +84,13 @@ export class Game {
     settings: QualitySettings,
     parts: {
       world: PhysicsWorld;
-      track: BuiltTrack;
-      validation: ValidationReport;
+      region: BuiltRegion;
       derived: DerivedVehicle;
       car: Car;
-      session: RaceSession;
-      trackView: TrackView;
+      session: WorldSession;
+      regionView: RegionView;
       carVisual: CarVisual;
       sun: THREE.DirectionalLight;
-      turntable: THREE.Mesh;
-      turntableCollider: R.Collider;
       chase: ChaseCamera;
     },
   ) {
@@ -108,17 +98,19 @@ export class Game {
     this.uiRoot = uiRoot;
     this.settings = settings;
     this.world = parts.world;
-    this.track = parts.track;
-    this.validation = parts.validation;
+    this.region = parts.region;
     this.derived = parts.derived;
     this.car = parts.car;
     this.session = parts.session;
-    this.trackView = parts.trackView;
+    this.regionView = parts.regionView;
     this.carVisual = parts.carVisual;
     this.sun = parts.sun;
-    this.turntable = parts.turntable;
-    this.turntableCollider = parts.turntableCollider;
     this.chase = parts.chase;
+    this.lastProjection = this.region.network.project(
+      parts.car.position.x,
+      parts.car.position.z,
+      parts.car.position.y,
+    );
 
     this.input = new Input(window);
     this.renderer = new THREE.WebGLRenderer({
@@ -128,27 +120,26 @@ export class Game {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(MEADOW.theme.skyBottom);
+    this.renderer.setClearColor(REGION_SKELETON.theme.skyBottom);
     this.applyQuality();
 
     this.scene.add(this.carMeshRoot);
     this.carMeshRoot.add(this.carVisual.root);
 
-    this.hud = new Hud(this.track);
+    this.hud = new WorldHud(this.region);
     this.debug = new DebugPanel();
     this.menu = new Menu(
-      MEADOW,
-      this.validation.stats,
-      this.track.minimap.points,
+      regionInfoOf(this.region),
       { quality: this.settings.quality, showDebug: this.settings.showDebug },
       this.audioSettings,
       {
-        onStart: () => this.startRace(),
-        onRestart: () => this.startRace(),
+        onStart: () => this.startDriving(),
+        onRestart: () => this.startDriving(),
         onBackToMenu: () => this.showMenu(),
         onSettingsChange: (s) => {
           this.settings = { ...s };
           this.debug.setVisible(s.showDebug);
+          this.regionView.setDebugVisible(s.showDebug);
           this.applyQuality();
         },
         onDriverChange: (species) => {
@@ -161,38 +152,27 @@ export class Game {
         },
       },
     );
-    this.results = new Results({
-      onRestart: () => this.startRace(),
-      onBackToMenu: () => this.showMenu(),
-    });
     this.pause = new PauseOverlay({
       onResume: () => this.resume(),
-      onRestart: () => this.startRace(),
+      onRestart: () => this.startDriving(),
       onBackToMenu: () => this.showMenu(),
     });
 
-    this.uiRoot.append(
-      this.menu.root,
-      this.hud.root,
-      this.debug.root,
-      this.results.root,
-      this.pause.root,
-    );
+    this.uiRoot.append(this.menu.root, this.hud.root, this.debug.root, this.pause.root);
     this.hud.root.classList.add('hidden');
     this.debug.setVisible(this.settings.showDebug);
+    this.regionView.setDebugVisible(this.settings.showDebug);
 
-    // 任意用户手势都尝试启动音频（只需成功一次）
-    const kick = () => this.ensureAudio();
-    window.addEventListener('pointerdown', kick, { once: false });
-    window.addEventListener('keydown', kick, { once: false });
-
+    // 首次用户手势启动音频
+    const kick = (): void => this.ensureAudio();
+    window.addEventListener('pointerdown', kick);
+    window.addEventListener('keydown', kick);
     window.addEventListener('resize', this.onResize);
     this.onResize();
     this.showMenu();
     this.renderer.setAnimationLoop(this.tick);
   }
 
-  /** 初始化物理、赛道、车辆与界面，返回可用的 Game。 */
   static async create(
     canvas: HTMLCanvasElement,
     uiRoot: HTMLElement,
@@ -202,11 +182,10 @@ export class Game {
 
     const derived = deriveVehicle(STOCK_KART);
     const world = new PhysicsWorld(-derived.gravity);
-    const track = new TrackBuilder(MEADOW, world).built;
-    const validation = validateTrack(MEADOW, track.centerline);
-    const trackView = buildTrackView(track, MEADOW.theme, settings.quality);
+    const region = new RegionBuilder(REGION_SKELETON, world).built;
+    const regionView = buildRegionView(region, settings.quality);
 
-    const theme = MEADOW.theme;
+    const theme = REGION_SKELETON.theme;
     const hemi = new THREE.HemisphereLight(theme.ambient, theme.grass, theme.ambientIntensity);
     const sun = new THREE.DirectionalLight(theme.sun, theme.sunIntensity);
     sun.castShadow = QUALITY_PRESETS[settings.quality].shadows;
@@ -215,8 +194,8 @@ export class Game {
       QUALITY_PRESETS[settings.quality].shadowMapSize,
     );
     sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 260;
-    const half = 44;
+    sun.shadow.camera.far = 320;
+    const half = 48;
     sun.shadow.camera.left = -half;
     sun.shadow.camera.right = half;
     sun.shadow.camera.top = half;
@@ -225,46 +204,20 @@ export class Game {
     sun.shadow.normalBias = 0.04;
     sun.shadow.radius = QUALITY_PRESETS[settings.quality].shadowRadius;
 
-    const spawn = track.spawns[0];
+    const spawn = region.spawn;
     const car = new Car({
       spec: STOCK_KART,
       world,
-      position: { x: spawn.x, y: spawn.y + 0.4, z: spawn.z },
+      position: { x: spawn.x, y: spawn.y, z: spawn.z },
       heading: spawn.heading,
     });
 
-    // 主菜单的旋转纸盘（有真实碰撞体，车辆会稳稳停在上面）
-    const discRadius = 3.4;
-    const discGeo = new THREE.CylinderGeometry(discRadius, discRadius, 0.14, 28);
-    const discMat = paperMaterial(0xffffff, {
-      map: paperTexture({
-        color: 0xe8c982,
-        seed: 4242,
-        size: 512,
-        fiber: 0.4,
-        blotch: 0.6,
-        creases: 2,
-        grid: 1,
-        edgeShade: 0.3,
-        key: 'turntable',
-      }),
+    const session = new WorldSession({
+      config: region.config,
+      network: region.network,
+      car,
+      spawn,
     });
-    const turntable = new THREE.Mesh(discGeo, discMat);
-    turntable.position.set(spawn.x, spawn.y - 0.02, spawn.z);
-    turntable.receiveShadow = true;
-    const discBody = world.createStaticBody(spawn.x, spawn.y - 0.09, spawn.z);
-    const turntableCollider = world.addStaticCollider(
-      discBody,
-      R.ColliderDesc.cylinder(0.07, discRadius).setFriction(0.9),
-      surfaceById('cardboard'),
-    );
-
-    const session = new RaceSession({
-      centerline: track.centerline,
-      checkpoints: track.checkpoints,
-      laps: MEADOW.laps,
-    });
-    session.addRacer('player', car);
 
     const carVisual = buildCarVisual(STOCK_KART, {
       species: 'bear',
@@ -279,25 +232,20 @@ export class Game {
 
     const game = new Game(canvas, uiRoot, settings, {
       world,
-      track,
-      validation,
+      region,
       derived,
       car,
       session,
-      trackView,
+      regionView,
       carVisual,
       sun,
-      turntable,
-      turntableCollider,
       chase,
     });
 
-    // 场景装配放到构造之后，保证 UI 与光照都已就绪
     game.scene.add(hemi);
     game.scene.add(sun);
     game.scene.add(sun.target);
-    game.scene.add(trackView.group);
-    game.scene.add(turntable);
+    game.scene.add(regionView.group);
     game.scene.fog = new THREE.Fog(theme.fog, theme.fogNear, theme.fogFar);
 
     return game;
@@ -323,78 +271,44 @@ export class Game {
   };
 
   // -------------------------------------------------------------------------
-  // 流程控制
+  // 流程
   // -------------------------------------------------------------------------
 
   showMenu(): void {
     this.state = 'menu';
     this.menu.setVisible(true);
     this.hud.root.classList.add('hidden');
-    this.results.setVisible(false);
     this.pause.setVisible(false);
-    this.turntable.visible = true;
-    this.turntableCollider.setEnabled(true);
-    const spawn = this.track.spawns[0];
-    this.car.teleportTo({ x: spawn.x, y: spawn.y + 0.06, z: spawn.z }, spawn.heading);
+    const spawn = this.region.spawn;
+    this.car.teleportTo({ x: spawn.x, y: spawn.y, z: spawn.z }, spawn.heading);
     this.menuOrbit = 0;
   }
 
-  /** 浏览器要求音频由用户手势启动，所以在第一次点按/按键时尝试恢复。 */
-  private ensureAudio(): void {
-    if (this.audioStarted) return;
-    this.audioStarted = true;
-    void this.audio.resume().then((ok) => {
-      if (!ok) {
-        this.audioStarted = false;
-        return;
-      }
-      this.audio.setSettings(this.audioSettings);
-      this.audio.startMusic();
-    });
-  }
-
-  startRace(): void {
+  /** 进入自由驾驶。 */
+  startDriving(): void {
     this.ensureAudio();
     this.audio.cue('ui');
     this.menu.setVisible(false);
-    this.results.setVisible(false);
     this.pause.setVisible(false);
     this.hud.root.classList.remove('hidden');
-    this.turntable.visible = false;
-    this.turntableCollider.setEnabled(false);
-    this.session.restart();
-    this.session.goToCountdown();
-    const spawn = this.track.spawns[0];
-    this.car.teleportTo({ x: spawn.x, y: spawn.y + 0.3, z: spawn.z }, spawn.heading);
+    this.session.resetToSpawn();
     this.chase.snapTo(this.car);
     this.accumulator = 0;
-    this.state = 'racing';
+    this.state = 'driving';
+    this.hud.showToast('自由驾驶：沿路网探索；边界空气墙之外尚未开放', 'info', 3.4);
   }
 
   private resume(): void {
     if (this.state !== 'paused') return;
-    this.state = 'racing';
+    this.state = 'driving';
     this.pause.setVisible(false);
     this.accumulator = 0;
   }
 
   private pauseGame(): void {
-    if (this.state !== 'racing') return;
+    if (this.state !== 'driving') return;
     this.state = 'paused';
     this.pause.setVisible(true);
-  }
-
-  private finishRace(): void {
-    if (this.state === 'finished') return;
-    this.state = 'finished';
-    this.results.show(
-      this.session,
-      this.session.resultOf('player'),
-      this.session.racers[0].bestLap,
-      DRIVERS[this.driver].name,
-      '阶段一暂不发放彩纸币（奖励与配件系统属于阶段三）',
-    );
-    this.results.setVisible(true);
   }
 
   private rebuildCarVisual(): void {
@@ -409,6 +323,19 @@ export class Game {
       quality: this.settings.quality,
     });
     this.carMeshRoot.add(this.carVisual.root);
+  }
+
+  private ensureAudio(): void {
+    if (this.audioStarted) return;
+    this.audioStarted = true;
+    void this.audio.resume().then((ok) => {
+      if (!ok) {
+        this.audioStarted = false;
+        return;
+      }
+      this.audio.setSettings(this.audioSettings);
+      this.audio.startMusic();
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -428,9 +355,7 @@ export class Game {
     }
 
     this.handleActions();
-    // 除了暂停，所有状态都推进物理：菜单里车辆会自然落到旋转纸盘上
     const simulating = this.state !== 'paused';
-    const timing = this.state === 'racing' || this.state === 'finished';
     let steps = 0;
 
     if (simulating) {
@@ -438,7 +363,7 @@ export class Game {
       const maxSteps = 6;
       const t0 = performance.now();
       while (this.accumulator >= PHYSICS_DT && steps < maxSteps) {
-        this.stepPhysics(PHYSICS_DT, timing);
+        this.stepPhysics(PHYSICS_DT);
         this.accumulator -= PHYSICS_DT;
         steps++;
       }
@@ -452,49 +377,19 @@ export class Game {
     const alpha = simulating ? Math.min(this.accumulator / PHYSICS_DT, 1) : 1;
     this.syncCarVisual(alpha);
     this.updateCamera(frameSeconds);
-    this.trackView.update(frameSeconds, this.chase.camera.position);
+    this.regionView.update(frameSeconds, this.chase.camera.position);
 
-    for (const ev of this.session.drainEvents()) {
-      if (ev.type === 'invalid-lap') {
-        this.hud.showToast(ev.message ?? '本圈无效', 'bad', 3.2);
-        this.audio.cue('invalid');
-      } else if (ev.type === 'wrong-way') {
-        this.hud.showToast('行驶方向反了', 'warn', 2.5);
-      } else if (ev.type === 'illegal-progress') {
-        this.hud.showToast(ev.message ?? '检测到异常移动', 'warn', 2.5);
-      } else if (ev.type === 'checkpoint') {
-        this.audio.cue('checkpoint');
-      } else if (ev.type === 'lap') {
-        this.hud.showToast(`第 ${this.session.racers[0].lapTimes.length} 圈完成`, 'info', 1.5);
-        this.audio.cue('lap');
-      } else if (ev.type === 'finish') {
-        this.audio.cue('finish');
-        this.finishRace();
-      } else if (ev.type === 'reset') {
-        this.hud.showToast('已回到最近检查点', 'info', 1.4);
-        this.audio.cue('reset');
-      } else if (ev.type === 'go') {
-        this.audio.cue('go');
-      }
+    if (this.session.takeBoundaryHit()) {
+      this.hud.showToast('此区域尚未开放', 'warn', 2.0);
+      this.audio.cue('ui');
     }
-
-    const racer = this.session.racers[0];
-    if (this.state === 'racing' || this.state === 'finished') {
-      this.hud.update(frameSeconds, this.session, racer, DRIVERS[this.driver].name);
-    }
-    // 倒计时整秒提示音
-    if (this.state === 'racing' && this.session.phase === 'countdown') {
-      const label = this.session.countdownLabel;
-      if (label !== this.lastCountdownLabel) {
-        this.lastCountdownLabel = label;
-        if (label !== '' && label !== 'GO!') this.audio.cue('countdown');
-      }
-    } else {
-      this.lastCountdownLabel = '';
+    if (this.state === 'driving') {
+      this.hud.update(frameSeconds, this.session, this.car);
     }
 
     this.updateSun();
-    if (this.audioStarted) this.audio.update(frameSeconds, this.car, this.session);
+
+    if (this.audioStarted) this.audio.update(frameSeconds, this.car, null);
 
     if (this.debug.visible) {
       const info = this.renderer.info;
@@ -514,27 +409,25 @@ export class Game {
     this.renderer.render(this.scene, this.chase.camera);
   };
 
-  /**
-   * 一个固定物理步。
-   * @param timing 是否推进比赛计时与计圈（菜单里只跑物理，不计时）
-   */
-  private stepPhysics(dt: number, timing: boolean): void {
-    const allowControl = this.state === 'racing' && !this.session.racers[0].finished;
-    const keyboard = this.input.sample(dt, allowControl && this.session.phase === 'racing');
+  /** 一个固定物理步。 */
+  private stepPhysics(dt: number): void {
+    const allowControl = this.state === 'driving';
+    const keyboard = this.input.sample(dt, allowControl);
     const input = this.debugInput && allowControl ? this.debugInput : keyboard;
-    // 倒计时（以及暂停恢复后的第一帧）自动拉住手刹：
-    // 发车位通常在坡上，不给油又不拉手刹会自己溜下去（表现为"开局自动倒退"）。
-    // 用手刹而不是刹车键，因为刹车键在低速时会被判定为倒挡输入。
-    if (this.session.phase === 'countdown') {
+    // 菜单里车停在路上：不拉手刹会在坡道上自己溜走
+    if (this.state === 'menu') {
       input.handbrake = true;
       input.brake = 0;
       input.throttle = 0;
     }
     this.car.step(dt, input);
     this.world.step();
-    if (timing) this.session.update(dt);
 
-    // 车轮视觉转角取物理真实值（Rapier 累计的车轮旋转；车轴指向 -X 故取负）
+    const p = this.car.position;
+    this.lastProjection = this.region.network.project(p.x, p.z, p.y);
+    if (allowControl) this.session.update(dt, this.lastProjection);
+
+    // 车轮视觉转角取物理真实值（车轴指向 -X 故取负）
     for (let i = 0; i < 4; i++) {
       const rot = this.car.vehicle.wheelRotation(i);
       if (rot !== null) this.wheelRollVisual[i] = -rot;
@@ -557,9 +450,8 @@ export class Game {
   private updateCamera(dt: number): void {
     const cam = this.chase.camera;
     if (this.state === 'menu') {
+      // 菜单：绕车缓慢旋转展示
       this.menuOrbit += dt * 0.22;
-      // 展示用旋转纸盘（视觉旋转，转轴与车身分离，避免把车蹭跑）
-      this.turntable.rotation.y += dt * 0.34;
       const p = this.car.position;
       const r = 9.5;
       cam.position.set(
@@ -588,16 +480,21 @@ export class Game {
     for (const action of this.input.takeActions()) {
       switch (action) {
         case 'pause':
-          if (this.state === 'racing') this.pauseGame();
+          if (this.state === 'driving') this.pauseGame();
           else if (this.state === 'paused') this.resume();
-          else if (this.state === 'finished') this.showMenu();
           break;
         case 'reset':
-          if (this.state === 'racing') this.session.resetRacer('player');
+          if (this.state === 'driving') {
+            this.session.resetToSpawn();
+            this.chase.snapTo(this.car);
+            this.hud.showToast('已回到出生点', 'info', 1.4);
+            this.audio.cue('reset');
+          }
           break;
         case 'debug':
           this.settings.showDebug = !this.settings.showDebug;
           this.debug.setVisible(this.settings.showDebug);
+          this.regionView.setDebugVisible(this.settings.showDebug);
           this.menu.refresh();
           break;
         case 'camera':
@@ -607,11 +504,15 @@ export class Game {
           this.audioSettings = { ...this.audioSettings, muted: !this.audioSettings.muted };
           this.audio.setSettings(this.audioSettings);
           this.menu.setAudioSettings(this.audioSettings);
-          this.hud.showToast(this.audioSettings.muted ? '已静音（M 恢复）' : '已恢复声音', 'info', 1.4);
+          this.hud.showToast(
+            this.audioSettings.muted ? '已静音（M 恢复）' : '已恢复声音',
+            'info',
+            1.4,
+          );
           break;
         }
         case 'restart':
-          if (this.state !== 'racing') this.startRace();
+          if (this.state === 'menu') this.startDriving();
           break;
         default:
           break;
@@ -620,80 +521,77 @@ export class Game {
   }
 
   // -------------------------------------------------------------------------
-  // 给外部（自动化验证 / 控制台诊断）读取的接口
+  // 对外接口（自动化验证 / 控制台诊断）
   // -------------------------------------------------------------------------
 
   get appState(): AppState {
     return this.state;
   }
 
-  get raceSession(): RaceSession {
+  get worldSession(): WorldSession {
     return this.session;
   }
 
-  get validationReport(): ValidationReport {
-    return this.validation;
-  }
-
-  get playerCar(): Car {
-    return this.car;
-  }
-
-  get builtTrack(): BuiltTrack {
-    return this.track;
+  get builtRegion(): BuiltRegion {
+    return this.region;
   }
 
   get physicsWorld(): PhysicsWorld {
     return this.world;
   }
 
-  /**
-   * 供自动化验证使用的驾驶接口：直接注入车辆输入。
-   * 仅用于测试/诊断脚本，正常游玩走 Input 的键盘路径。
-   */
-  setDebugInput(input: { throttle: number; brake: number; steer: number; handbrake: boolean } | null): void {
-    this.debugInput = input;
+  get playerCar(): Car {
+    return this.car;
   }
 
-  /** 直接请求换挡/倒挡等状态（用于自动化脚本）。 */
-  get hudElement(): Hud {
-    return this.hud;
+  /** 仅用于测试/诊断脚本：直接注入车辆输入。 */
+  setDebugInput(
+    input: { throttle: number; brake: number; steer: number; handbrake: boolean } | null,
+  ): void {
+    this.debugInput = input;
   }
 
   snapshot(): {
     state: AppState;
     speedKmh: number;
-    lap: number;
     elapsed: number;
+    distanceKm: number;
+    segmentId: string;
+    onRoad: boolean;
+    lateral: number;
     wheelContacts: number;
     surface: string;
     physicsSteps: number;
     fps: number;
     position: { x: number; y: number; z: number };
-    onTrack: boolean;
-    lateral: number;
     rpm: number;
     gear: number;
     cameraMode: string;
+    distanceToBoundary: number;
+    boundaryHits: number;
   } {
     const p = this.car.position;
-    const proj = this.track.centerline.project(p.x, p.z, p.y);
+    const proj = this.lastProjection;
     const tel = this.car.telemetry;
+    const stats = this.session.current;
     return {
       state: this.state,
       speedKmh: tel.speed * 3.6,
-      lap: this.session.racers[0]?.lap ?? 1,
-      elapsed: this.session.elapsed,
+      elapsed: stats.elapsed,
+      distanceKm: stats.distance / 1000,
+      segmentId: proj.segmentId,
+      onRoad: proj.distance <= proj.halfWidth,
+      lateral: proj.lateral,
       wheelContacts: tel.wheelContacts,
       surface: tel.surface?.id ?? '—',
       physicsSteps: this.physicsStepsLastFrame,
       fps: this.fps,
       position: { x: p.x, y: p.y, z: p.z },
-      onTrack: proj.distance <= proj.halfWidth,
-      lateral: proj.lateral,
       rpm: tel.rpm,
       gear: tel.gear,
       cameraMode: this.chase.modeName,
+      distanceToBoundary: stats.distanceToBoundary,
+      boundaryHits: stats.boundaryHits,
     };
   }
 
@@ -702,13 +600,30 @@ export class Game {
     this.renderer.setAnimationLoop(null);
     window.removeEventListener('resize', this.onResize);
     this.input.dispose();
-    this.trackView.dispose();
+    this.audio.dispose();
+    this.regionView.dispose();
     this.carVisual.dispose();
     this.world.dispose();
     this.renderer.dispose();
     this.canvas.remove();
     this.uiRoot.replaceChildren();
   }
+}
+
+/** 把区域数据折算成菜单要展示的信息。 */
+function regionInfoOf(region: BuiltRegion): MenuRegionInfo {
+  return {
+    chapter: 1,
+    name: region.config.name,
+    subtitle: region.config.subtitle,
+    difficulty: 1,
+    roadLengthMeters: region.stats.totalRoadLength,
+    segmentCount: region.stats.segmentCount,
+    gateCount: region.config.gates.length,
+    junctionCount: region.config.junctions.length,
+    minimapPolylines: region.minimap.polylines,
+    minimapBounds: region.minimap.bounds,
+  };
 }
 
 const TMP_QA = new THREE.Quaternion();

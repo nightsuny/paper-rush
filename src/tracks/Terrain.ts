@@ -44,15 +44,36 @@ export interface TerrainOptions {
   corridorCutRadius?: number;
 }
 
-export function buildTerrain(
-  config: TrackConfig,
-  centerline: Centerline,
-  opts: TerrainOptions = {},
-): TerrainData {
-  const resolution = opts.resolution ?? 168;
-  const margin = opts.margin ?? 150;
-  const cutRadius = opts.corridorCutRadius ?? 0;
+/** 一次"最近道路"查询的结果。 */
+export interface TerrainRoadSample {
+  /** 到最近路面的水平距离（米） */
+  distance: number;
+  /** 相对路面中心线的横向偏移（米，带符号） */
+  lateral: number;
+  /**
+   * 用于计算走廊高度的横向偏移：夹紧到 ±路面半宽。
+   * 超高只作用在路面宽度内，走廊地面不应该跟着倾斜。
+   */
+  bankLateral: number;
+  /** 该处路面的中心高程（米） */
+  roadY: number;
+  /** 该处路面右向量的 y 分量（用于横向超高） */
+  roadRy: number;
+}
 
+/**
+ * 最近道路查询的抽象。
+ * 单条闭合赛道由 `centerlineProjector` 提供；开放世界路网由 `networkProjector` 提供。
+ * 地形的"走廊压平 + 走廊挖空"算法本身与此无关，因此可以完全复用。
+ */
+export interface TerrainProjector {
+  sample(x: number, z: number): TerrainRoadSample;
+  /** 所有道路采样点的包围盒 */
+  bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
+}
+
+/** 单条闭合赛道的投影器。 */
+export function centerlineProjector(centerline: Centerline): TerrainProjector {
   let minX = Infinity;
   let minZ = Infinity;
   let maxX = -Infinity;
@@ -63,10 +84,38 @@ export function buildTerrain(
     maxX = Math.max(maxX, s.x);
     maxZ = Math.max(maxZ, s.z);
   }
-  minX -= margin;
-  minZ -= margin;
-  maxX += margin;
-  maxZ += margin;
+  return {
+    bounds: { minX, minZ, maxX, maxZ },
+    sample(x, z) {
+      const p = centerline.project(x, z);
+      const s = centerline.samples[p.index];
+      return {
+        distance: p.distance,
+        lateral: p.lateral,
+        bankLateral: Math.max(-s.halfWidth, Math.min(s.halfWidth, p.lateral)),
+        roadY: s.y,
+        roadRy: s.ry,
+      };
+    },
+  };
+}
+
+/**
+ * 地形生成核心。`config` 只需要地形与纸板厚度参数。
+ */
+export function buildTerrainFromProjector(
+  projector: TerrainProjector,
+  config: TerrainSourceSpec,
+  opts: TerrainOptions = {},
+): TerrainData {
+  const resolution = opts.resolution ?? 168;
+  const margin = opts.margin ?? 150;
+  const cutRadius = opts.corridorCutRadius ?? 0;
+
+  let minX = projector.bounds.minX - margin;
+  let minZ = projector.bounds.minZ - margin;
+  let maxX = projector.bounds.maxX + margin;
+  let maxZ = projector.bounds.maxZ + margin;
   const spanX = maxX - minX;
   const spanZ = maxZ - minZ;
   const cells = resolution;
@@ -78,8 +127,7 @@ export function buildTerrain(
     for (let i = 0; i < cols; i++) {
       const x = minX + (i / cells) * spanX;
       const z = minZ + (j / cells) * spanZ;
-      const p = centerline.project(x, z);
-      base[i + j * cols] = centerline.samples[p.index].y;
+      base[i + j * cols] = projector.sample(x, z).roadY;
     }
   }
 
@@ -123,12 +171,11 @@ export function buildTerrain(
     for (let i = 0; i < cols; i++) {
       const x = minX + (i / cells) * spanX;
       const z = minZ + (j / cells) * spanZ;
-      const p = centerline.project(x, z);
+      const p = projector.sample(x, z);
       const d = p.distance;
       distances[i + j * cols] = d;
-      const sample = centerline.samples[p.index];
-      // 紧贴路面的走廊高度（与路段平面完全一致，包含横向超高）
-      const nearH = sample.y + p.lateral * sample.ry - lip;
+      // 紧贴路面的走廊高度：横向超高只算到路面半宽，再往外是水平地面
+      const nearH = p.roadY + p.bankLateral * p.roadRy - lip;
       const corridor = 1 - smoothstep(flatInner, flatOuter, d);
       // 丘陵：只有离赛道足够远才起伏，避免赛道旁边出现陡坡
       const hillMask = smoothstep(hillsStart, hillsEnd, d);
@@ -221,6 +268,24 @@ export function buildTerrain(
     bounds: { minX, minZ, maxX, maxZ },
     heightAt,
   };
+}
+
+/** 地形生成只需要这些字段（TrackConfig 与 RegionConfig 都能满足）。 */
+export interface TerrainSourceSpec {
+  terrainAmplitude: number;
+  terrainScale: number;
+  seed: number;
+  paperThickness: number;
+  width: number;
+}
+
+/** 单条闭合赛道的地形（保持原有签名，现有调用与测试不受影响）。 */
+export function buildTerrain(
+  config: TrackConfig,
+  centerline: Centerline,
+  opts: TerrainOptions = {},
+): TerrainData {
+  return buildTerrainFromProjector(centerlineProjector(centerline), config, opts);
 }
 
 export function terrainToGeometry(data: TerrainData): THREE.BufferGeometry {

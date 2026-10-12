@@ -60,11 +60,17 @@ export class TrackBuilder {
 
   constructor(config: TrackConfig, world: PhysicsWorld, resolution = 1.4) {
     const centerline = new Centerline(config, resolution);
-    const road = buildRoadGeometry(config, centerline);
+    const road = buildRoadGeometry(
+      { width: config.width, paperThickness: config.paperThickness, closed: true },
+      centerline,
+    );
     const terrain = buildTerrain(config, centerline, {
       corridorCutRadius: road.corridorCutRadius,
     });
-    const guardrails = buildGuardrails(config, centerline);
+    const guardrails = buildGuardrails(
+      { runs: config.guardrails, closed: true },
+      centerline,
+    );
 
     let colliderCount = 0;
     const asphalt = surfaceById('asphalt');

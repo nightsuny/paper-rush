@@ -1,4 +1,4 @@
-import type { TrackConfig } from './types';
+import type { ControlPoint } from './types';
 
 /**
  * 赛道中心线：闭合 Catmull-Rom 样条 + 等弧长重采样 + 带超高的局部坐标系。
@@ -44,6 +44,19 @@ export interface CenterlineSample {
   bankExplicit: boolean;
 }
 
+/**
+ * Centerline 需要的最小配置。
+ * `TrackConfig`（闭合赛道）与 `RoadSegmentConfig`（开放路段）都能满足它，
+ * 因此同一套曲线/投影/标架代码可以同时服务赛道与开放世界路网。
+ */
+export interface CurveSpec {
+  points: readonly ControlPoint[];
+  width: number;
+  maxBank: number;
+  /** 是否闭合回路。默认 true；开放世界里的路段为 false。 */
+  closed?: boolean;
+}
+
 export interface CenterlineProjection {
   index: number;
   /** 沿赛道归一化进度 0..1 */
@@ -64,10 +77,12 @@ function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): 
   );
 }
 
-export class Centerline {
-  readonly config: TrackConfig;
+export class Centerline<S extends CurveSpec = CurveSpec> {
+  readonly config: S;
   readonly samples: CenterlineSample[];
   readonly totalLength: number;
+  /** 是否为闭合回路 */
+  readonly closed: boolean;
 
   private readonly cell = 16;
   private readonly minX: number;
@@ -76,8 +91,9 @@ export class Centerline {
   private readonly gridH: number;
   private readonly grid: number[][];
 
-  constructor(config: TrackConfig, resolution = 1.0) {
+  constructor(config: S, resolution = 1.0) {
     this.config = config;
+    this.closed = config.closed !== false;
     const built = this.build(config, resolution);
     this.samples = built.samples;
     this.totalLength = built.totalLength;
@@ -113,11 +129,12 @@ export class Centerline {
   }
 
   private build(
-    config: TrackConfig,
+    config: CurveSpec,
     resolution: number,
   ): { samples: CenterlineSample[]; totalLength: number } {
     const points = config.points;
     const n = points.length;
+    const closed = config.closed !== false;
     const sub = 14;
     const rawX: number[] = [];
     const rawY: number[] = [];
@@ -126,11 +143,13 @@ export class Centerline {
     const rawBank: number[] = [];
     const defaultHalf = config.width / 2;
 
-    for (let i = 0; i < n; i++) {
-      const p0 = points[(i - 1 + n) % n];
+    // 闭合曲线：邻居回绕；开放曲线：端点处复制相邻点（标准开放 Catmull-Rom 处理）
+    const segCount = closed ? n : n - 1;
+    for (let i = 0; i < segCount; i++) {
+      const p0 = points[closed ? (i - 1 + n) % n : Math.max(i - 1, 0)];
       const p1 = points[i];
-      const p2 = points[(i + 1) % n];
-      const p3 = points[(i + 2) % n];
+      const p2 = points[closed ? (i + 1) % n : Math.min(i + 1, n - 1)];
+      const p3 = points[closed ? (i + 2) % n : Math.min(i + 2, n - 1)];
       const w1 = p1.halfWidth ?? defaultHalf;
       const w2 = p2.halfWidth ?? defaultHalf;
       const b1 = p1.bank;
@@ -146,25 +165,38 @@ export class Centerline {
       }
     }
 
+    // 开放曲线要把终点也放进折线里（闭合曲线靠回绕自然闭合）
+    if (!closed) {
+      const last = points[n - 1];
+      rawX.push(last.x);
+      rawY.push(last.y);
+      rawZ.push(last.z);
+      rawHalf.push(last.halfWidth ?? defaultHalf);
+      rawBank.push(last.bank ?? NaN);
+    }
+
     const m = rawX.length;
+    const rawSegs = closed ? m : m - 1;
     const cum: number[] = [0];
-    for (let i = 0; i < m; i++) {
-      const j = (i + 1) % m;
+    for (let i = 0; i < rawSegs; i++) {
+      const j = closed ? (i + 1) % m : i + 1;
       cum.push(cum[i] + Math.hypot(rawX[j] - rawX[i], rawZ[j] - rawZ[i]));
     }
-    const totalLength = cum[m];
-    const count = Math.max(64, Math.round(totalLength / resolution));
-    const step = totalLength / count;
+    const totalLength = cum[rawSegs];
+    const count = Math.max(closed ? 64 : 8, Math.round(totalLength / resolution));
+    // 闭合曲线采样 [0, totalLength)；开放曲线要多采一个点，让 t=1 处真实存在
+    const sampleCount = closed ? count : count + 1;
+    const step = totalLength / Math.max(count, 1);
 
     const samples: CenterlineSample[] = [];
     let cursor = 0;
-    for (let i = 0; i < count; i++) {
-      const target = i * step;
-      while (cursor < m - 1 && cum[cursor + 1] < target) cursor++;
+    for (let i = 0; i < sampleCount; i++) {
+      const target = Math.min(i * step, totalLength);
+      while (cursor < rawSegs - 1 && cum[cursor + 1] < target) cursor++;
       const segLen = Math.max(cum[cursor + 1] - cum[cursor], 1e-9);
       const f = Math.min(Math.max((target - cum[cursor]) / segLen, 0), 1);
-      const a = cursor % m;
-      const b = (cursor + 1) % m;
+      const a = closed ? cursor % m : cursor;
+      const b = closed ? (cursor + 1) % m : Math.min(cursor + 1, m - 1);
       const noteBank = rawBank[a];
       samples.push({
         x: rawX[a] + (rawX[b] - rawX[a]) * f,
@@ -185,9 +217,12 @@ export class Centerline {
 
     const N = samples.length;
     // 切向 / 坡度 / 带符号曲率
+    // 开放曲线在端点用单侧差分（prev 或 next 取自身），不会退化成零向量
+    const idxPrev = (i: number) => (closed ? (i - 1 + N) % N : Math.max(i - 1, 0));
+    const idxNext = (i: number) => (closed ? (i + 1) % N : Math.min(i + 1, N - 1));
     for (let i = 0; i < N; i++) {
-      const prev = samples[(i - 1 + N) % N];
-      const next = samples[(i + 1) % N];
+      const prev = samples[idxPrev(i)];
+      const next = samples[idxNext(i)];
       let dx = next.x - prev.x;
       let dy = next.y - prev.y;
       let dz = next.z - prev.z;
@@ -239,7 +274,7 @@ export class Centerline {
       let sum = 0;
       let n = 0;
       for (let k = -half; k <= half; k++) {
-        const j = ((i + k) % N + N) % N;
+        const j = closed ? ((i + k) % N + N) % N : Math.min(Math.max(i + k, 0), N - 1);
         if (samples[j].bankExplicit) continue;
         sum += autoBank[j];
         n++;
@@ -287,9 +322,40 @@ export class Centerline {
     return { samples, totalLength };
   }
 
-  /** 归一化位置 → 插值采样。 */
+  /** 归一化位置 → 插值采样。闭合曲线回绕，开放曲线夹紧到 [0,1]。 */
   sampleAt(t: number): CenterlineSample {
     const N = this.samples.length;
+    if (!this.closed) {
+      const tt = Math.min(Math.max(t, 0), 1);
+      // 开放曲线：N 个采样点覆盖 [0,1]，共 N-1 段
+      const f = tt * (N - 1);
+      const i0 = Math.min(Math.floor(f), Math.max(N - 2, 0));
+      const i1 = Math.min(i0 + 1, N - 1);
+      const k = f - i0;
+      const a = this.samples[i0];
+      const b = this.samples[i1];
+      return {
+        x: a.x + (b.x - a.x) * k,
+        y: a.y + (b.y - a.y) * k,
+        z: a.z + (b.z - a.z) * k,
+        tx: a.tx + (b.tx - a.tx) * k,
+        ty: a.ty + (b.ty - a.ty) * k,
+        tz: a.tz + (b.tz - a.tz) * k,
+        rx: a.rx + (b.rx - a.rx) * k,
+        ry: a.ry + (b.ry - a.ry) * k,
+        rz: a.rz + (b.rz - a.rz) * k,
+        ux: a.ux + (b.ux - a.ux) * k,
+        uy: a.uy + (b.uy - a.uy) * k,
+        uz: a.uz + (b.uz - a.uz) * k,
+        halfWidth: a.halfWidth + (b.halfWidth - a.halfWidth) * k,
+        s: a.s + (b.s - a.s) * k,
+        curvature: a.curvature + (b.curvature - a.curvature) * k,
+        signedCurvature: a.signedCurvature + (b.signedCurvature - a.signedCurvature) * k,
+        grade: a.grade + (b.grade - a.grade) * k,
+        bank: a.bank + (b.bank - a.bank) * k,
+        bankExplicit: a.bankExplicit && b.bankExplicit,
+      };
+    }
     const tt = ((t % 1) + 1) % 1;
     const f = tt * N;
     const i0 = Math.floor(f) % N;

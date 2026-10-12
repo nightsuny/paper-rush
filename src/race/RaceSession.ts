@@ -1,4 +1,4 @@
-import type { Centerline } from '../tracks/Centerline';
+import type { Centerline, CurveSpec } from '../tracks/Centerline';
 import type { TrackCheckpoint } from '../tracks/Track';
 import type { Car } from '../vehicles/Car';
 
@@ -72,9 +72,14 @@ export interface RaceResult {
 }
 
 export interface RaceSessionOptions {
-  centerline: Centerline;
+  /** 只需要曲线能力：闭合赛道与开放路段都能传进来 */
+  centerline: Centerline<CurveSpec>;
   checkpoints: TrackCheckpoint[];
   laps: number;
+  /** 展示用名称（结算界面用），不再从 centerline.config 上取 */
+  name?: string;
+  /** 起终点线所在的归一化位置 */
+  startT?: number;
   /** 倒计时秒数 */
   countdown?: number;
   /** 判定"进度跳变"的最大每帧位移（米）。超过则视为非法（瞬移/穿模）。 */
@@ -84,9 +89,11 @@ export interface RaceSessionOptions {
 const WRONG_WAY_TIME = 1.6;
 
 export class RaceSession {
-  readonly centerline: Centerline;
+  readonly centerline: Centerline<CurveSpec>;
   readonly checkpoints: TrackCheckpoint[];
   readonly totalLaps: number;
+  readonly trackName: string;
+  readonly startT: number;
   readonly countdownDuration: number;
   readonly maxProgressJump: number;
 
@@ -108,6 +115,8 @@ export class RaceSession {
     this.centerline = opts.centerline;
     this.checkpoints = opts.checkpoints;
     this.totalLaps = opts.laps;
+    this.trackName = opts.name ?? '';
+    this.startT = opts.startT ?? 0;
     this.countdownDuration = opts.countdown ?? 3.4;
     this.maxProgressJump = opts.maxProgressJumpMeters ?? 45;
     this.countdownRemaining = this.countdownDuration;
@@ -274,7 +283,7 @@ export class RaceSession {
 
       // 起终点线：集齐检查点后再次正向穿过才计圈
       if (timing && dT > 0 && advanceMeters <= this.maxProgressJump &&
-          this.crossedForward(r.lastT, t, this.centerline.config.startT)) {
+          this.crossedForward(r.lastT, t, this.startT)) {
         const allCheckpoints = r.nextCheckpoint >= this.checkpoints.length;
         // 发车时车辆停在起点线后方，会立刻压过一次线：那不是"跑完一圈"。
         // 用本圈实际行驶距离区分，避免开局误报漏检查点。
@@ -362,7 +371,7 @@ export class RaceSession {
     const t =
       r.nextCheckpoint > 0
         ? cps[r.nextCheckpoint - 1].t
-        : this.centerline.config.startT;
+        : this.startT;
     const p = this.centerline.pointAt(t, 0);
     const sample = this.centerline.sampleAt(t);
     r.car.teleportTo({ x: p.x, y: p.y + 0.05, z: p.z }, Math.atan2(sample.tx, sample.tz));

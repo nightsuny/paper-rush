@@ -39,6 +39,8 @@ function rig(laps = 3): Rig {
     checkpoints: track.checkpoints,
     laps,
     countdown: 0,
+    name: MEADOW.name,
+    startT: MEADOW.startT,
   });
   session.addRacer('player', car);
 

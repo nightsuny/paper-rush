@@ -315,7 +315,18 @@ export class Car {
     const lateralAccelRaw = (lateralSpeed - this.prevLateralSpeed) / dt + yawRate * forwardSpeed;
     const smoothK = Math.min(1, dt / 0.12);
     this.lateralAccelSmoothed += (lateralAccelRaw - this.lateralAccelSmoothed) * smoothK;
-    const totalLateralForce = Math.abs(spec.mass * lateralAccelRaw);
+    // 摩擦圆用的横向力必须夹到"轮胎物理上能给得出的上限"。
+    //
+    // 否则会出大问题：碰撞瞬间的横向加速度冲量能到几十 g，算出几万牛的"横向力"，
+    // 于是每轮的纵向可用附着被算成 0 —— 车在撞一下之后就再也加不了速，
+    // 表现为"撞一下之后永久卡死"。轮胎能产生的横向力本就不可能超过 μ·N，
+    // 夹住它既是物理正确的，也彻底消除了这个卡死。
+    const tyreLateralLimit =
+      spec.mass *
+      derivedGravityOf(this.derived) *
+      ((this.derived.wheelFriction[0] + this.derived.wheelFriction[2]) / 2) *
+      0.95;
+    const totalLateralForce = Math.min(Math.abs(spec.mass * this.lateralAccelSmoothed), tyreLateralLimit);
     this.prevLateralSpeed = lateralSpeed;
     const longitudinalAccel = (forwardSpeed - this.prevForwardSpeed) / dt;
     this.prevForwardSpeed = forwardSpeed;
@@ -630,6 +641,10 @@ interface Quat {
   y: number;
   z: number;
   w: number;
+}
+
+function derivedGravityOf(d: { gravity: number }): number {
+  return d.gravity;
 }
 
 function clamp(v: number, lo: number, hi: number): number {

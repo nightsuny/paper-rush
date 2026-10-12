@@ -37,6 +37,10 @@ export const SURFACES: Record<string, SurfaceType> = {
   kerb: { id: 'kerb', gripScale: 0.92, rollingScale: 1.25, onTrack: true, color: 0xd8534a },
   grass: { id: 'grass', gripScale: 0.55, rollingScale: 5.0, onTrack: false, color: 0x9dc46a },
   cardboard: { id: 'cardboard', gripScale: 0.95, rollingScale: 1.1, onTrack: true, color: 0xc89b62 },
+  // 土路/林道：抓地比沥青低、滚阻明显更高，但没有草地那么惩罚
+  dirt: { id: 'dirt', gripScale: 0.78, rollingScale: 2.4, onTrack: true, color: 0xb08a5c },
+  // 雪地：抓地低、滚阻高，用来做雪山区域
+  snow: { id: 'snow', gripScale: 0.6, rollingScale: 2.8, onTrack: true, color: 0xeef2f6 },
   wall: { id: 'wall', gripScale: 0.8, rollingScale: 1.0, onTrack: true, color: 0xe8dfc8 },
   void: { id: 'void', gripScale: 0.5, rollingScale: 2.0, onTrack: false, color: 0x6d6455 },
 };
