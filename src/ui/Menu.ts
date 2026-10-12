@@ -3,6 +3,7 @@ import type { ValidationReport } from '../tracks/validate';
 import { deriveVehicle } from '../vehicles/VehicleSpec';
 import { STOCK_KART } from '../vehicles/vehicleCatalog';
 import { DRIVERS, type DriverSpecies } from '../vehicles/CarVisual';
+import { DEFAULT_AUDIO_SETTINGS, type AudioSettings } from '../audio/AudioEngine';
 
 export interface MenuSettings {
   quality: 'high' | 'low';
@@ -13,6 +14,7 @@ export interface MenuCallbacks {
   onStart: () => void;
   onSettingsChange: (settings: MenuSettings) => void;
   onDriverChange: (species: DriverSpecies) => void;
+  onAudioChange: (settings: AudioSettings) => void;
   onRestart: () => void;
   onBackToMenu: () => void;
 }
@@ -33,6 +35,7 @@ export class Menu {
   private readonly track: TrackConfig;
   private readonly stats: ValidationReport['stats'] | null;
   private readonly minimapPoints: ReadonlyArray<{ x: number; z: number }>;
+  private audio: AudioSettings = { ...DEFAULT_AUDIO_SETTINGS };
   private bound = false;
 
   constructor(
@@ -40,12 +43,14 @@ export class Menu {
     stats: ValidationReport['stats'] | null,
     minimapPoints: ReadonlyArray<{ x: number; z: number }>,
     initialSettings: MenuSettings,
+    initialAudio: AudioSettings,
     private readonly cb: MenuCallbacks,
   ) {
     this.track = track;
     this.stats = stats;
     this.minimapPoints = minimapPoints;
     this.settings = { ...initialSettings };
+    this.audio = { ...initialAudio };
     this.root = document.createElement('div');
     this.root.className = 'menu';
     this.build();
@@ -157,6 +162,21 @@ export class Menu {
               </span>
             </div>
             <div class="setting">
+              <span class="setting__label">音乐</span>
+              <input class="slider" type="range" min="0" max="100" step="5" data-audio="music" />
+            </div>
+            <div class="setting">
+              <span class="setting__label">音效</span>
+              <input class="slider" type="range" min="0" max="100" step="5" data-audio="sfx" />
+            </div>
+            <div class="setting">
+              <span class="setting__label">静音</span>
+              <span class="seg" data-mute>
+                <button data-m="off" type="button">有声</button>
+                <button data-m="on" type="button">静音</button>
+              </span>
+            </div>
+            <div class="setting">
               <span class="setting__label">调试面板</span>
               <span class="seg" data-debug>
                 <button data-d="on" type="button">开</button>
@@ -201,6 +221,28 @@ export class Menu {
         this.syncSelection();
       });
     });
+    this.root.querySelectorAll('[data-m]').forEach((el) => {
+      el.addEventListener('click', () => {
+        this.audio.muted = (el as HTMLElement).dataset.m === 'on';
+        this.cb.onAudioChange(this.audio);
+        this.syncSelection();
+      });
+    });
+    this.root.querySelectorAll('[data-audio]').forEach((el) => {
+      const input = el as HTMLInputElement;
+      input.value = String(Math.round(this.audio[input.dataset.audio as 'music' | 'sfx'] * 100));
+      input.addEventListener('input', () => {
+        const key = input.dataset.audio as 'music' | 'sfx';
+        this.audio[key] = Number(input.value) / 100;
+        this.cb.onAudioChange(this.audio);
+      });
+    });
+  }
+
+  /** 外部（如 M 键）改变静音状态后同步界面。 */
+  setAudioSettings(next: AudioSettings): void {
+    this.audio = { ...next };
+    this.syncSelection();
   }
 
   /** 只切换选中态，不重建 DOM（重建会丢焦点，也更容易闪）。 */
@@ -216,6 +258,15 @@ export class Menu {
     this.root.querySelectorAll('[data-d]').forEach((el) => {
       const on = (el as HTMLElement).dataset.d === 'on';
       el.setAttribute('aria-pressed', String(on === this.settings.showDebug));
+    });
+    this.root.querySelectorAll('[data-m]').forEach((el) => {
+      const on = (el as HTMLElement).dataset.m === 'on';
+      el.setAttribute('aria-pressed', String(on === this.audio.muted));
+    });
+    this.root.querySelectorAll('[data-audio]').forEach((el) => {
+      const input = el as HTMLInputElement;
+      const key = input.dataset.audio as 'music' | 'sfx';
+      input.value = String(Math.round(this.audio[key] * 100));
     });
   }
 

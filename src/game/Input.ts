@@ -2,7 +2,7 @@
  * 键盘输入。只负责把按键状态翻译成车辆输入，不直接触碰物理。
  *
  * W/↑ 加速，S/↓ 刹车与倒车，A/D 或 ←/→ 转向，空格 手刹，
- * R 重置到最近检查点，Esc 暂停，F3 调试面板，C 切换镜头。
+ * R 重置到最近检查点，Esc 暂停，F3 调试面板，C 切换镜头，M 静音。
  */
 
 export interface InputState {
@@ -12,7 +12,7 @@ export interface InputState {
   handbrake: boolean;
 }
 
-export type GameAction = 'pause' | 'reset' | 'debug' | 'camera' | 'restart';
+export type GameAction = 'pause' | 'reset' | 'debug' | 'camera' | 'restart' | 'mute';
 
 const KEY_ALIASES: Record<string, string> = {
   arrowup: 'up',
@@ -62,6 +62,7 @@ export class Input {
       if (key === 'f3') this.actions.push('debug');
       if (key === 'c') this.actions.push('camera');
       if (key === 'enter') this.actions.push('restart');
+      if (key === 'm') this.actions.push('mute');
     }
   };
 

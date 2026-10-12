@@ -555,3 +555,51 @@ export function makeRoundelTexture(number: number, ringColor = 0xc33a2f): THREE.
   textureCache.set(key, tex);
   return tex;
 }
+
+/**
+ * 弯道箭头牌：米白纸板 + 黑黄相间的连续箭头。
+ * 放在急弯外侧，既提示弯向，也让赛道看起来"有人设计过"。
+ */
+export function makeChevronTexture(direction: 1 | -1 = 1, count = 3): THREE.CanvasTexture {
+  const key = `chevron-${direction}-${count}`;
+  const cached = textureCache.get(key);
+  if (cached) return cached as THREE.CanvasTexture;
+  const w = 512;
+  const h = 128;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('无法创建 2D 画布上下文');
+  // 纸底
+  ctx.fillStyle = '#f6f1e2';
+  ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 700; i++) {
+    ctx.fillStyle = `rgba(120,102,74,${Math.random() * 0.06})`;
+    ctx.fillRect(Math.random() * w, Math.random() * h, 2, 1);
+  }
+  // 黑边框
+  ctx.strokeStyle = '#2b2620';
+  ctx.lineWidth = 7;
+  ctx.strokeRect(4, 4, w - 8, h - 8);
+  // 箭头：从深到浅的黄黑三角
+  const bw = w / count;
+  for (let i = 0; i < count; i++) {
+    const x0 = i * bw;
+    ctx.fillStyle = i % 2 === 0 ? '#e8b53a' : '#2b2620';
+    ctx.beginPath();
+    const cx = x0 + bw * 0.5;
+    const tip = cx + direction * bw * 0.34;
+    const back = cx - direction * bw * 0.26;
+    ctx.moveTo(tip, h * 0.5);
+    ctx.lineTo(back, h * 0.16);
+    ctx.lineTo(back, h * 0.84);
+    ctx.closePath();
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  textureCache.set(key, tex);
+  return tex;
+}

@@ -16,11 +16,16 @@ import {
   skyTexture,
 } from './PaperMaterials';
 import {
+  buildBarn,
   buildCardboardHills,
+  buildChevronSign,
   buildCloud,
   buildCrate,
+  buildFenceRun,
   buildFlower,
+  buildHaystack,
   buildHouse,
+  buildPond,
   buildSceneryAssets,
   buildTree,
   buildWindmill,
@@ -34,6 +39,19 @@ export interface TrackView {
   update: (elapsed: number, cameraPosition: THREE.Vector3) => void;
   dispose: () => void;
 }
+
+/** 地图特色装饰区：在赛道外围成片摆放，决定这张地图的性格。 */
+const FEATURE_ZONES: Array<{ from: number; to: number; side: 1 | -1; kind: 'fence' | 'hay' | 'barn' | 'pond' }> = [
+  { from: 0.015, to: 0.075, side: -1, kind: 'fence' },
+  { from: 0.04, to: 0.1, side: 1, kind: 'hay' },
+  { from: 0.2, to: 0.3, side: 1, kind: 'fence' },
+  { from: 0.24, to: 0.34, side: -1, kind: 'hay' },
+  { from: 0.36, to: 0.46, side: -1, kind: 'barn' },
+  { from: 0.5, to: 0.62, side: 1, kind: 'pond' },
+  { from: 0.62, to: 0.72, side: -1, kind: 'fence' },
+  { from: 0.74, to: 0.84, side: 1, kind: 'hay' },
+  { from: 0.86, to: 0.95, side: -1, kind: 'barn' },
+];
 
 /** 沿赛道路肩外侧布置装饰的横向偏移（米）。 */
 const DECOR_MIN_OFFSET = 2.2;
@@ -79,10 +97,11 @@ export function buildTrackView(
       seed: config.seed + 5,
       size: 512,
       fiber: 0.45,
-      blotch: 0.5,
+      blotch: 0.55,
       creases: 3,
-      grid: 1,
-      edgeShade: 0.2,
+      // 只留一点点网格暗示"手工垫板"，太重会像瓷砖
+      grid: 0.28,
+      edgeShade: 0.18,
       key: `terrain-${theme.paperGround}`,
     }),
   });
@@ -94,7 +113,7 @@ export function buildTrackView(
   if (terrainMap) {
     terrainMap.wrapS = THREE.RepeatWrapping;
     terrainMap.wrapT = THREE.RepeatWrapping;
-    terrainMap.repeat.set(spanX / 16, spanZ / 16);
+    terrainMap.repeat.set(spanX / 34, spanZ / 34);
   }
   group.add(terrainMesh);
   disposables.push(() => {
@@ -258,14 +277,22 @@ export function buildTrackView(
 
   // ---------- 装饰 ----------
   group.add(
-    buildDecorations(track, assets, config, rng, quality),
+    buildDecorations(track, assets, config, theme, rng, quality),
   );
 
   // ---------- 地标：大纸风车 ----------
+  // 地标：大纸风车。放在起跑直道内侧约 55 m 处，
+  // 发车与回到起跑直道时都能看到，远距离也能靠轮廓辨认。
   const windmill = buildWindmill(theme, config.seed + 23);
   const center = loopCenter(cl);
-  windmill.group.position.set(center.x, track.terrain.heightAt(center.x, center.z), center.z);
-  windmill.group.scale.setScalar(1.55);
+  const lmSample = cl.sampleAt(0.045);
+  const lmInward = Math.sign(lmSample.signedCurvature || 1);
+  const lmLat = -lmInward * 55;
+  const lmX = lmSample.x + lmSample.rx * lmLat;
+  const lmZ = lmSample.z + lmSample.rz * lmLat;
+  windmill.group.position.set(lmX, track.terrain.heightAt(lmX, lmZ), lmZ);
+  windmill.group.scale.setScalar(2.6);
+  windmill.group.rotation.y = 0.6;
   group.add(windmill.group);
 
   // ---------- 背景：纸板山丘 + 云 ----------
@@ -350,8 +377,10 @@ function buildStartGantry(track: BuiltTrack, theme: TrackTheme, seed: number): T
   const cl = track.centerline;
   const gate = track.startGate;
   const postMat = paperMaterial(0xd8cfb4, { map: cardboardTexture(0xd8cfb4, seed + 29) });
-  const beamMap = checkerTexture(1);
-  beamMap.repeat.set(24, 1);
+  // 贴图本身是 2×2 格；横向重复 8 次 → 每格约 0.95 m，
+  // 纵向 0.5 次 → 每格约 1.1 m，接近正方形。（格子太密在透视下会糊成摩尔纹）
+  const beamMap = checkerTexture(2);
+  beamMap.repeat.set(8, 0.5);
   const beamMat = paperMaterial(0xffffff, { map: beamMap });
   const w = track.config.width / 2 + 1.6;
   const h = 6.4;
@@ -379,8 +408,10 @@ function buildStartGantry(track: BuiltTrack, theme: TrackTheme, seed: number): T
   // 让格纹在路面上整体歪掉 —— 这正是之前"起点黑白格是歪的"的原因。
   const lineGeo = new THREE.PlaneGeometry(track.config.width, 2.6);
   lineGeo.rotateX(-Math.PI / 2);
-  const lineMap = checkerTexture(1);
-  lineMap.repeat.set(track.config.width, 2.6);
+  // 贴图含 12×12 格：横向铺 1 次 → 12 格 / 12 m = 每格 1 m；
+  // 纵向铺 2.6/12 次 → 约 2.6 格 / 2.6 m，也是每格 1 m。
+  const lineMap = checkerTexture(12);
+  lineMap.repeat.set(1, 2.6 / track.config.width);
   const lineMat = paperMaterial(0xffffff, { map: lineMap });
   const line = new THREE.Mesh(lineGeo, lineMat);
   line.rotation.y = Math.atan2(sample.tx, sample.tz);
@@ -442,6 +473,7 @@ function buildDecorations(
   track: BuiltTrack,
   assets: SceneryAssets,
   config: TrackConfig,
+  theme: TrackTheme,
   rng: () => number,
   quality: 'high' | 'low',
 ): THREE.Group {
@@ -596,6 +628,70 @@ function buildDecorations(
         buckets.rocks++;
       }
     }
+  }
+
+  // ---------------------------------------------------------------
+  // 地图特色：成段栅栏、干草堆、谷仓、纸片水塘
+  // ---------------------------------------------------------------
+  for (const zone of FEATURE_ZONES) {
+    const mid = (zone.from + zone.to) / 2;
+    const smp = cl.sampleAt(mid);
+    const lateral = zone.side * range(rng, smp.halfWidth + 12, smp.halfWidth + 26);
+    const x = smp.x + smp.rx * lateral;
+    const z = smp.z + smp.rz * lateral;
+    if (cl.project(x, z).distance < smp.halfWidth + 4) continue;
+    const y = placeOnGround(x, z);
+    if (zone.kind === 'fence') {
+      const run = buildFenceRun(assets, rng, range(rng, 26, 46));
+      run.position.set(x, y, z);
+      run.rotation.y = Math.atan2(smp.tx, smp.tz);
+      group.add(run);
+    } else if (zone.kind === 'hay') {
+      const n = 3 + Math.floor(rng() * 4);
+      for (let i = 0; i < n; i++) {
+        const hx = x + range(rng, -6, 6);
+        const hz = z + range(rng, -6, 6);
+        const hay = buildHaystack(assets, rng);
+        hay.position.set(hx, placeOnGround(hx, hz), hz);
+        group.add(hay);
+      }
+    } else if (zone.kind === 'barn') {
+      const barn = buildBarn(assets, rng, range(rng, 0.95, 1.25));
+      barn.position.set(x, y, z);
+      group.add(barn);
+    } else {
+      const pond = buildPond(rng, range(rng, 10, 16));
+      pond.position.set(x, y, z);
+      group.add(pond);
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // 弯道箭头牌：自动放在全场最急的几个弯外侧。
+  // 既提示弯向，也让地图看起来是"有人设计过"而不是随机铺草。
+  // ---------------------------------------------------------------
+  const corners: Array<{ t: number; k: number }> = [];
+  const scanStep = Math.max(1, Math.floor(cl.samples.length / 400));
+  for (let i = 0; i < cl.samples.length; i += scanStep) {
+    corners.push({ t: cl.samples[i].s / cl.totalLength, k: cl.samples[i].curvature });
+  }
+  corners.sort((a, b) => b.k - a.k);
+  const chosen: number[] = [];
+  for (const cand of corners) {
+    if (chosen.length >= 8) break;
+    if (chosen.some((t) => Math.abs(t - cand.t) < 0.03)) continue;
+    chosen.push(cand.t);
+  }
+  for (const t of chosen) {
+    const smp = cl.sampleAt(t);
+    const turnLeft = smp.signedCurvature > 0;
+    const board = buildChevronSign(theme, turnLeft ? -1 : 1, config.seed + Math.round(t * 997));
+    const lateral = (turnLeft ? 1 : -1) * (smp.halfWidth + 4.2);
+    const bx = smp.x + smp.rx * lateral;
+    const bz = smp.z + smp.rz * lateral;
+    board.position.set(bx, placeOnGround(bx, bz), bz);
+    board.rotation.y = Math.atan2(smp.tx, smp.tz) + Math.PI;
+    group.add(board);
   }
 
   return group;

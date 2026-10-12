@@ -269,6 +269,58 @@ describe('车辆物理（真实 Rapier 求解，非模拟）', () => {
     expect(turningDecel).toBeLessThan(lineDecel * 0.98);
   });
 
+  it('满打方向不会甩尾（附着力不足时表现为推头，而不是失控）', () => {
+    const h = harness();
+    h.run(240, {});
+    for (let s = 0; s < 60 * 20; s++) {
+      h.run(1, { throttle: 1 });
+      if (h.car.telemetry.speed * 3.6 >= 60) break;
+    }
+    const entry = h.car.telemetry.speed;
+    let peakSlip = 0;
+    let peakYaw = 0;
+    let minUp = 1;
+    for (let s = 0; s < 60 * 4; s++) {
+      // 满打方向 + 中等油门：这是最容易甩尾的操作
+      h.run(1, { throttle: 0.5, steer: 1 });
+      const t = h.car.telemetry;
+      peakSlip = Math.max(peakSlip, Math.abs(t.slipAngle));
+      peakYaw = Math.max(peakYaw, Math.abs(h.car.body.angvel().y));
+      minUp = Math.min(minUp, h.car.up.y);
+    }
+    console.log(
+      `[实测] 满打方向 4s（入弯 ${(entry * 3.6).toFixed(0)}km/h）：峰值侧滑角=${((peakSlip * 180) / Math.PI).toFixed(1)}° ` +
+        `峰值横摆角速度=${peakYaw.toFixed(2)} rad/s 最低车身倾角=${minUp.toFixed(3)} 末速=${(h.car.telemetry.speed * 3.6).toFixed(0)}km/h ` +
+        `平均横向加速度=${Math.abs(h.car.telemetry.lateralAccel).toFixed(1)}m/s²`,
+    );
+    // 不翻车、不失控：侧滑角有界，车身保持正向
+    expect(minUp).toBeGreaterThan(0.8);
+    expect(peakSlip).toBeLessThan(0.45);
+  });
+
+  it('手刹仍能制造可控漂移（漂移是主动操作，不是自动甩尾）', () => {
+    const h = harness();
+    h.run(240, {});
+    for (let s = 0; s < 60 * 20; s++) {
+      h.run(1, { throttle: 1 });
+      if (h.car.telemetry.speed * 3.6 >= 55) break;
+    }
+    let peakSlip = 0;
+    for (let s = 0; s < 60 * 2; s++) {
+      h.run(1, { throttle: 0.6, steer: 1, handbrake: true });
+      peakSlip = Math.max(peakSlip, Math.abs(h.car.telemetry.slipAngle));
+    }
+    // 松开手刹后应能恢复抓地
+    for (let s = 0; s < 60 * 2; s++) h.run(1, { throttle: 0.4, steer: 0.3 });
+    const recovered = Math.abs(h.car.telemetry.slipAngle);
+    console.log(
+      `[实测] 手刹漂移：峰值侧滑角=${((peakSlip * 180) / Math.PI).toFixed(1)}°` +
+        `（无手刹时满打方向仅约 2°）；松手刹 2s 后侧滑角恢复到 ${((recovered * 180) / Math.PI).toFixed(1)}°`,
+    );
+    expect(peakSlip).toBeGreaterThan(0.2); // 手刹确实能甩起来
+    expect(recovered).toBeLessThan(0.2); // 而且能恢复
+  });
+
   it('松油门滑行会减速（发动机制动 + 滚动阻力 + 空气阻力）', () => {
     const h = harness();
     h.run(200, {});

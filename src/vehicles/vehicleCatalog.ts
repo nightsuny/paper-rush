@@ -55,23 +55,23 @@ export const STOCK_KART: VehicleSpec = {
 
   tyreFrictionFront: 1.38,
   tyreFrictionRear: 1.32,
-  tyreSideStiffness: 1.35,
+  tyreSideStiffness: 1.25,
   rollingResistance: 0.015,
   frictionCircle: true,
 
   brakeForceFront: 2900,
   brakeForceRear: 1600,
   handbrakeForceRear: 3400,
-  handbrakeGripScale: 0.5,
+  handbrakeGripScale: 0.62,
 
   dragArea: 0.62,
   downforceAreaFront: 0.22,
   downforceAreaRear: 0.30,
 
   maxSteerAngle: 0.42,
-  steerFalloffSpeed: 13,
-  steerFalloffRatio: 0.3,
-  steerRate: 3.6,
+  steerFalloffSpeed: 16,
+  steerFalloffRatio: 0.34,
+  steerRate: 4.0,
   steerReturnRate: 7.0,
 
   gravityScale: 1.35,

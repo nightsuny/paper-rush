@@ -17,6 +17,7 @@ import { Hud } from '../ui/Hud';
 import { Menu } from '../ui/Menu';
 import { DebugPanel, type DebugStats } from '../ui/DebugPanel';
 import { PauseOverlay, Results } from '../ui/Results';
+import { AudioEngine, DEFAULT_AUDIO_SETTINGS, type AudioSettings } from '../audio/AudioEngine';
 
 export type AppState = 'menu' | 'racing' | 'paused' | 'finished';
 
@@ -59,6 +60,9 @@ export class Game {
   private readonly turntableCollider: R.Collider;
   private carVisual: CarVisual;
 
+  private readonly audio = new AudioEngine();
+  private audioSettings: AudioSettings = { ...DEFAULT_AUDIO_SETTINGS };
+  private audioStarted = false;
   private readonly hud: Hud;
   private readonly menu: Menu;
   private readonly debug: DebugPanel;
@@ -76,6 +80,7 @@ export class Game {
   private fpsAccum = 0;
   private fpsFrames = 0;
   private menuOrbit = 0;
+  private lastCountdownLabel = '';
   private readonly wheelRollVisual = [0, 0, 0, 0];
   private debugInput: { throttle: number; brake: number; steer: number; handbrake: boolean } | null = null;
   private disposed = false;
@@ -136,6 +141,7 @@ export class Game {
       this.validation.stats,
       this.track.minimap.points,
       { quality: this.settings.quality, showDebug: this.settings.showDebug },
+      this.audioSettings,
       {
         onStart: () => this.startRace(),
         onRestart: () => this.startRace(),
@@ -148,6 +154,10 @@ export class Game {
         onDriverChange: (species) => {
           this.driver = species;
           this.rebuildCarVisual();
+        },
+        onAudioChange: (a) => {
+          this.audioSettings = { ...a };
+          this.audio.setSettings(a);
         },
       },
     );
@@ -170,6 +180,11 @@ export class Game {
     );
     this.hud.root.classList.add('hidden');
     this.debug.setVisible(this.settings.showDebug);
+
+    // 任意用户手势都尝试启动音频（只需成功一次）
+    const kick = () => this.ensureAudio();
+    window.addEventListener('pointerdown', kick, { once: false });
+    window.addEventListener('keydown', kick, { once: false });
 
     window.addEventListener('resize', this.onResize);
     this.onResize();
@@ -324,7 +339,23 @@ export class Game {
     this.menuOrbit = 0;
   }
 
+  /** 浏览器要求音频由用户手势启动，所以在第一次点按/按键时尝试恢复。 */
+  private ensureAudio(): void {
+    if (this.audioStarted) return;
+    this.audioStarted = true;
+    void this.audio.resume().then((ok) => {
+      if (!ok) {
+        this.audioStarted = false;
+        return;
+      }
+      this.audio.setSettings(this.audioSettings);
+      this.audio.startMusic();
+    });
+  }
+
   startRace(): void {
+    this.ensureAudio();
+    this.audio.cue('ui');
     this.menu.setVisible(false);
     this.results.setVisible(false);
     this.pause.setVisible(false);
@@ -424,21 +455,46 @@ export class Game {
     this.trackView.update(frameSeconds, this.chase.camera.position);
 
     for (const ev of this.session.drainEvents()) {
-      if (ev.type === 'invalid-lap') this.hud.showToast(ev.message ?? '本圈无效', 'bad', 3.2);
-      else if (ev.type === 'wrong-way') this.hud.showToast('行驶方向反了', 'warn', 2.5);
-      else if (ev.type === 'illegal-progress') this.hud.showToast(ev.message ?? '检测到异常移动', 'warn', 2.5);
-      else if (ev.type === 'lap') {
+      if (ev.type === 'invalid-lap') {
+        this.hud.showToast(ev.message ?? '本圈无效', 'bad', 3.2);
+        this.audio.cue('invalid');
+      } else if (ev.type === 'wrong-way') {
+        this.hud.showToast('行驶方向反了', 'warn', 2.5);
+      } else if (ev.type === 'illegal-progress') {
+        this.hud.showToast(ev.message ?? '检测到异常移动', 'warn', 2.5);
+      } else if (ev.type === 'checkpoint') {
+        this.audio.cue('checkpoint');
+      } else if (ev.type === 'lap') {
         this.hud.showToast(`第 ${this.session.racers[0].lapTimes.length} 圈完成`, 'info', 1.5);
-      } else if (ev.type === 'finish') this.finishRace();
-      else if (ev.type === 'reset') this.hud.showToast('已回到最近检查点', 'info', 1.4);
+        this.audio.cue('lap');
+      } else if (ev.type === 'finish') {
+        this.audio.cue('finish');
+        this.finishRace();
+      } else if (ev.type === 'reset') {
+        this.hud.showToast('已回到最近检查点', 'info', 1.4);
+        this.audio.cue('reset');
+      } else if (ev.type === 'go') {
+        this.audio.cue('go');
+      }
     }
 
     const racer = this.session.racers[0];
     if (this.state === 'racing' || this.state === 'finished') {
       this.hud.update(frameSeconds, this.session, racer, DRIVERS[this.driver].name);
     }
+    // 倒计时整秒提示音
+    if (this.state === 'racing' && this.session.phase === 'countdown') {
+      const label = this.session.countdownLabel;
+      if (label !== this.lastCountdownLabel) {
+        this.lastCountdownLabel = label;
+        if (label !== '' && label !== 'GO!') this.audio.cue('countdown');
+      }
+    } else {
+      this.lastCountdownLabel = '';
+    }
 
     this.updateSun();
+    if (this.audioStarted) this.audio.update(frameSeconds, this.car, this.session);
 
     if (this.debug.visible) {
       const info = this.renderer.info;
@@ -547,6 +603,13 @@ export class Game {
         case 'camera':
           this.chase.cycleMode();
           break;
+        case 'mute': {
+          this.audioSettings = { ...this.audioSettings, muted: !this.audioSettings.muted };
+          this.audio.setSettings(this.audioSettings);
+          this.menu.setAudioSettings(this.audioSettings);
+          this.hud.showToast(this.audioSettings.muted ? '已静音（M 恢复）' : '已恢复声音', 'info', 1.4);
+          break;
+        }
         case 'restart':
           if (this.state !== 'racing') this.startRace();
           break;

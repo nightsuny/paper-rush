@@ -1,6 +1,13 @@
 import * as THREE from 'three';
 import { createRng, range } from '../game/random';
-import { addOutline, cardboardTexture, outlineMaterial, paperMaterial, paperTexture } from './PaperMaterials';
+import {
+  addOutline,
+  cardboardTexture,
+  makeChevronTexture,
+  outlineMaterial,
+  paperMaterial,
+  paperTexture,
+} from './PaperMaterials';
 import type { TrackTheme } from '../tracks/types';
 
 /**
@@ -576,4 +583,163 @@ export function buildCrate(theme: TrackTheme, seed: number, size = 1.4): THREE.M
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
+}
+
+// ---------------------------------------------------------------------------
+// 地图特色构件
+// ---------------------------------------------------------------------------
+
+/** 大谷仓：砖红屋顶 + 米白墙 + 双开门，作为次级地标。 */
+export function buildBarn(assets: SceneryAssets, rng: () => number, scale = 1): THREE.Group {
+  const g = new THREE.Group();
+  const w = range(rng, 8.5, 11) * scale;
+  const d = range(rng, 6.5, 8.5) * scale;
+  const h = range(rng, 4.4, 5.6) * scale;
+
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), assets.materials.houseWall);
+  wall.position.y = h / 2;
+  wall.castShadow = true;
+  g.add(wall);
+  addOutline(wall, 0.02, g, assets.materials.outline);
+
+  // 双坡屋顶
+  const roofH = range(rng, 2.6, 3.4) * scale;
+  const hw = w / 2 + 0.4 * scale;
+  const hd = d / 2 + 0.4 * scale;
+  const verts = [
+    -hw, 0, -hd, hw, 0, -hd, hw, 0, hd, -hw, 0, hd,
+    0, roofH, -hd, 0, roofH, hd,
+  ];
+  const idx = [0, 2, 1, 0, 3, 2, 0, 1, 4, 3, 5, 2, 1, 2, 5, 1, 5, 4, 0, 4, 5, 0, 5, 3];
+  const roofGeo = new THREE.BufferGeometry();
+  roofGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  roofGeo.setIndex(idx);
+  const roof = new THREE.Mesh(flat(roofGeo), assets.materials.houseRoof);
+  roof.position.y = h;
+  roof.castShadow = true;
+  g.add(roof);
+  addOutline(roof, 0.02, g, assets.materials.outline);
+
+  // 白色门框 + 双开门
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(3.4 * scale, 3.6 * scale, 0.2 * scale), assets.materials.petal);
+  frame.position.set(0, 1.8 * scale, d / 2 + 0.02);
+  g.add(frame);
+  for (const side of [-1, 1]) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(1.5 * scale, 3.3 * scale, 0.24 * scale), assets.materials.houseRoof);
+    door.position.set(side * 0.8 * scale, 1.65 * scale, d / 2 + 0.06);
+    g.add(door);
+  }
+  // 山墙窗
+  const win = new THREE.Mesh(new THREE.CircleGeometry(0.5 * scale, 12), assets.materials.window);
+  win.position.set(0, h + roofH * 0.42, d / 2 + 0.06);
+  g.add(win);
+  g.rotation.y = rng() * Math.PI * 2;
+  return g;
+}
+
+/** 干草堆：圆锥形纸卷 + 顶部纹理。 */
+export function buildHaystack(assets: SceneryAssets, rng: () => number): THREE.Group {
+  const g = new THREE.Group();
+  const r = range(rng, 1.1, 1.7);
+  const h = range(rng, 1.6, 2.3);
+  const body = new THREE.Mesh(
+    flat(new THREE.ConeGeometry(r, h, 9, 2)),
+    paperMaterial(0xe0c07a, {
+      map: paperTexture({ color: 0xe0c07a, seed: 7711, fiber: 1.0, blotch: 0.4, creases: 2, key: 'hay' }),
+    }),
+  );
+  body.position.y = h / 2;
+  body.castShadow = true;
+  g.add(body);
+  addOutline(body, 0.03, g, assets.materials.outline);
+  // 顶上的小尖
+  const tip = new THREE.Mesh(flat(new THREE.ConeGeometry(r * 0.28, h * 0.3, 7)), assets.materials.houseWood);
+  tip.position.y = h + h * 0.12;
+  g.add(tip);
+  return g;
+}
+
+/** 纸片水塘：一块浅蓝纸片 + 深色纸边 + 几片草叶。 */
+export function buildPond(rng: () => number, radius = 9): THREE.Group {
+  const g = new THREE.Group();
+  const seg = 14;
+  const mkDisc = (r: number, y: number, color: number, key: string) => {
+    const positions: number[] = [];
+    for (let i = 0; i < seg; i++) {
+      const a0 = (i / seg) * Math.PI * 2;
+      const a1 = ((i + 1) / seg) * Math.PI * 2;
+      const r0 = r * range(rng, 0.86, 1.14);
+      const r1 = r * range(rng, 0.86, 1.14);
+      positions.push(
+        Math.cos(a0) * r0, y, Math.sin(a0) * r0,
+        Math.cos(a1) * r1, y, Math.sin(a1) * r1,
+        0, y, 0,
+      );
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const mesh = new THREE.Mesh(
+      flat(geo),
+      paperMaterial(color, {
+        map: paperTexture({ color, seed: 3311 + key.length, fiber: 0.5, blotch: 0.5, creases: 1, key: `pond-${key}` }),
+        side: THREE.DoubleSide,
+      }),
+    );
+    mesh.receiveShadow = true;
+    g.add(mesh);
+    return mesh;
+  };
+  // 深色纸边（下）→ 浅蓝水面（上），形成"纸片贴在桌上"的层次
+  mkDisc(radius * 1.14, 0.015, 0x8fb0a4, 'bank');
+  mkDisc(radius, 0.03, 0x9fc7db, 'water');
+  return g;
+}
+
+/** 一段木栅栏：沿给定朝向排开若干栅栏板 + 横杆。 */
+export function buildFenceRun(
+  assets: SceneryAssets,
+  rng: () => number,
+  length: number,
+  panelSpacing = 1.5,
+): THREE.Group {
+  const g = new THREE.Group();
+  const count = Math.max(2, Math.round(length / panelSpacing));
+  const railMat = paperMaterial(0xb98a5c);
+  for (let i = 0; i < count; i++) {
+    const panel = new THREE.Mesh(assets.geometries.fencePanel, assets.materials.houseWood);
+    panel.position.set((i - (count - 1) / 2) * panelSpacing, 0, range(rng, -0.03, 0.03));
+    panel.rotation.y = range(rng, -0.04, 0.04);
+    panel.castShadow = true;
+    g.add(panel);
+  }
+  // 两道横杆
+  for (const y of [0.28, 0.62]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(count * panelSpacing, 0.06, 0.035), railMat);
+    rail.position.set(0, y, -0.045);
+    g.add(rail);
+  }
+  return g;
+}
+
+/** 弯道箭头牌：一根木柱 + 一块连续箭头纸牌。 */
+export function buildChevronSign(
+  theme: TrackTheme,
+  direction: 1 | -1,
+  seed: number,
+): THREE.Group {
+  const g = new THREE.Group();
+  const postMat = paperMaterial(0x9b6b45, { map: cardboardTexture(0x9b6b45, seed) });
+  const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.7, 0.14), postMat);
+  post.position.y = 0.85;
+  post.castShadow = true;
+  g.add(post);
+  const boardMat = new THREE.MeshBasicMaterial({
+    map: makeChevronTexture(direction, 3),
+    side: THREE.DoubleSide,
+  });
+  const board = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 0.85), boardMat);
+  board.position.set(0, 1.55, 0.08);
+  g.add(board);
+  void theme;
+  return g;
 }
