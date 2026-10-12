@@ -45,14 +45,14 @@ const MEADOW_CHECKPOINTS = [0.08, 0.16, 0.25, 0.33, 0.42, 0.5, 0.58, 0.67, 0.75,
 
 /** 护栏：只在陡坡 + 弯道外侧增设，其余路段保留草地缓冲区（可以跑出去再回来）。 */
 const MEADOW_GUARDRAILS = [
-  { from: 0.0, to: 0.09, side: 'right' as const, offset: 7.2 },
-  { from: 0.13, to: 0.2, side: 'left' as const, offset: 7.2 },
-  { from: 0.28, to: 0.35, side: 'right' as const, offset: 7.2 },
-  { from: 0.4, to: 0.47, side: 'left' as const, offset: 7.2 },
-  { from: 0.55, to: 0.63, side: 'both' as const, offset: 7.4 },
-  { from: 0.68, to: 0.76, side: 'right' as const, offset: 7.2 },
-  { from: 0.8, to: 0.88, side: 'both' as const, offset: 7.4 },
-  { from: 0.92, to: 0.99, side: 'left' as const, offset: 7.2 },
+  { from: 0.0, to: 0.09, side: 'right' as const, offset: 10.4 },
+  { from: 0.13, to: 0.2, side: 'left' as const, offset: 10.4 },
+  { from: 0.28, to: 0.35, side: 'right' as const, offset: 10.4 },
+  { from: 0.4, to: 0.47, side: 'left' as const, offset: 10.4 },
+  { from: 0.55, to: 0.63, side: 'both' as const, offset: 10.4 },
+  { from: 0.68, to: 0.76, side: 'right' as const, offset: 10.4 },
+  { from: 0.8, to: 0.88, side: 'both' as const, offset: 10.4 },
+  { from: 0.92, to: 0.99, side: 'left' as const, offset: 10.4 },
 ];
 
 export const MEADOW: TrackConfig = {

@@ -81,15 +81,8 @@ export class TrackBuilder {
     );
     colliderCount++;
 
-    // 路缘侧壁：撞到路缘边缘时有真实反馈，也让轮胎射线在边缘有据可依
-    world.addStaticCollider(
-      roadBody,
-      R.ColliderDesc.trimesh(road.edgeWalls.vertices, road.edgeWalls.indices).setFriction(0.8).setRestitution(0.02),
-      wallSurface,
-    );
-    colliderCount++;
-
-    // 路肩（kerb）：单独一个碰撞体，用于区分路面材质（抓地略低、滚动阻力略高）
+    // 路肩（kerb）：单独登记一份碰撞面，让轮胎射线在路肩上拿到"抓地略低"的路面类型。
+    // 它与主路面网格在几何上重合，但材质不同 —— 车轮取到的会是这里登记的类型。
     const kerbLeft = world.createStaticBody(0, 0, 0);
     world.addStaticCollider(
       kerbLeft,
@@ -136,8 +129,8 @@ export class TrackBuilder {
       const q = new R.Quaternion(0, Math.sin(b.heading / 2), 0, Math.cos(b.heading / 2));
       world.addStaticCollider(
         railBody,
-        R.ColliderDesc.cuboid(b.halfThickness, b.halfHeight, b.halfLength)
-          .setTranslation(b.x, b.y, b.z)
+        R.ColliderDesc.cuboid(b.halfThickness, b.colliderHalfHeight, b.halfLength)
+          .setTranslation(b.x, b.colliderCenterY, b.z)
           .setRotation(q)
           .setFriction(0.5)
           .setRestitution(0.1)

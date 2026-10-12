@@ -463,6 +463,14 @@ export class Game {
     const allowControl = this.state === 'racing' && !this.session.racers[0].finished;
     const keyboard = this.input.sample(dt, allowControl && this.session.phase === 'racing');
     const input = this.debugInput && allowControl ? this.debugInput : keyboard;
+    // 倒计时（以及暂停恢复后的第一帧）自动拉住手刹：
+    // 发车位通常在坡上，不给油又不拉手刹会自己溜下去（表现为"开局自动倒退"）。
+    // 用手刹而不是刹车键，因为刹车键在低速时会被判定为倒挡输入。
+    if (this.session.phase === 'countdown') {
+      input.handbrake = true;
+      input.brake = 0;
+      input.throttle = 0;
+    }
     this.car.step(dt, input);
     this.world.step();
     if (timing) this.session.update(dt);

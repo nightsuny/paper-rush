@@ -58,57 +58,81 @@ function flat(geo: THREE.BufferGeometry): THREE.BufferGeometry {
   return g;
 }
 
-/** 低多边形车轮：八边形胎圈 + 纸轮毂 + 折纸轮辐。 */
-function makeWheelGeometry(radius: number, width: number, sides = 8): {
+/**
+ * 低多边形车轮。
+ *
+ * 轴向约定：车轮绕**局部 X 轴**旋转（与物理的车轴 axle = -X、以及
+ * `spin.rotation.x` 一致）。因此轮胎圆环必须建在 YZ 平面、厚度沿 X 方向。
+ * （早期版本把圆环建在 XY 平面、厚度沿 Z，等于整车车轮转了 90°。）
+ */
+function makeWheelGeometry(radius: number, width: number, sides = 10): {
   tire: THREE.BufferGeometry;
+  tread: THREE.BufferGeometry;
   hub: THREE.BufferGeometry;
   spokes: THREE.BufferGeometry;
 } {
-  const tirePos: number[] = [];
   const hw = width / 2;
-  // 胎面：外圈四边形带（左右两侧），法线朝外
+  const tirePos: number[] = [];
+  const treadPos: number[] = [];
+
   for (let i = 0; i < sides; i++) {
     const a0 = (i / sides) * Math.PI * 2;
     const a1 = ((i + 1) / sides) * Math.PI * 2;
-    const x0 = Math.cos(a0) * radius;
-    const y0 = Math.sin(a0) * radius;
-    const x1 = Math.cos(a1) * radius;
-    const y1 = Math.sin(a1) * radius;
-    // 胎面
-    tirePos.push(x0, y0, -hw, x0, y0, hw, x1, y1, hw);
-    tirePos.push(x0, y0, -hw, x1, y1, hw, x1, y1, -hw);
-    // 两侧胎侧（略微内缩，形成胎肩）
-    const r2 = radius * 0.78;
-    tirePos.push(x0, y0, hw, Math.cos(a0) * r2, Math.sin(a0) * r2, hw, Math.cos(a1) * r2, Math.sin(a1) * r2, hw);
-    tirePos.push(x0, y0, hw, Math.cos(a1) * r2, Math.sin(a1) * r2, hw, x1, y1, hw);
-    tirePos.push(Math.cos(a0) * r2, Math.sin(a0) * r2, -hw, x0, y0, -hw, x1, y1, -hw);
-    tirePos.push(Math.cos(a0) * r2, Math.sin(a0) * r2, -hw, x1, y1, -hw, Math.cos(a1) * r2, Math.sin(a1) * r2, -hw);
+    // 圆环位于 YZ 平面
+    const y0 = Math.cos(a0) * radius;
+    const z0 = Math.sin(a0) * radius;
+    const y1 = Math.cos(a1) * radius;
+    const z1 = Math.sin(a1) * radius;
+
+    // 胎面：外圈四边形带（厚度沿 X）
+    treadPos.push(-hw, y0, z0, hw, y0, z0, hw, y1, z1);
+    treadPos.push(-hw, y0, z0, hw, y1, z1, -hw, y1, z1);
+
+    // 两侧胎壁：从外圈向内收一点，形成胎肩厚度
+    const r2 = radius * 0.74;
+    const iy0 = Math.cos(a0) * r2;
+    const iz0 = Math.sin(a0) * r2;
+    const iy1 = Math.cos(a1) * r2;
+    const iz1 = Math.sin(a1) * r2;
+    // 外侧胎壁（+X）
+    tirePos.push(hw, y0, z0, hw, iy0, iz0, hw, iy1, iz1);
+    tirePos.push(hw, y0, z0, hw, iy1, iz1, hw, y1, z1);
+    // 内侧胎壁（-X）
+    tirePos.push(-hw, iy0, iz0, -hw, y0, z0, -hw, y1, z1);
+    tirePos.push(-hw, iy0, iz0, -hw, y1, z1, -hw, iy1, iz1);
   }
+
   const tire = new THREE.BufferGeometry();
   tire.setAttribute('position', new THREE.Float32BufferAttribute(tirePos, 3));
+  const tread = new THREE.BufferGeometry();
+  tread.setAttribute('position', new THREE.Float32BufferAttribute(treadPos, 3));
 
-  const hubGeo = new THREE.CylinderGeometry(radius * 0.5, radius * 0.5, width * 1.06, sides);
+  // 轮毂：圆柱轴向沿 X
+  const hubGeo = new THREE.CylinderGeometry(radius * 0.52, radius * 0.52, width * 1.08, sides);
   hubGeo.rotateZ(Math.PI / 2);
   const hub = flat(hubGeo);
 
-  // 轮辐：四根纸条
+  // 轮辐：五根纸条，贴在两侧轮毂面上
   const spokePos: number[] = [];
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2;
-    const w = 0.045 * radius;
-    const len = radius * 0.62;
-    const dx = Math.cos(a);
-    const dy = Math.sin(a);
-    const px = -dy * w;
-    const py = dx * w;
-    const z = i % 2 === 0 ? hw * 0.75 : -hw * 0.75;
-    spokePos.push(px, py, z, dx * len + px, dy * len + py, z, -px, -py, z);
-    spokePos.push(px, py, z, -px, -py, z, dx * len - px, dy * len - py, z);
+  const spokeCount = 5;
+  for (const side of [1, -1]) {
+    for (let i = 0; i < spokeCount; i++) {
+      const a = (i / spokeCount) * Math.PI * 2;
+      const w = 0.05 * radius;
+      const len = radius * 0.62;
+      const dy = Math.cos(a);
+      const dz = Math.sin(a);
+      const py = -dz * w;
+      const pz = dy * w;
+      const x = side * hw * 0.82;
+      spokePos.push(x, py, pz, x, dy * len + py, dz * len + pz, x, -py, -pz);
+      spokePos.push(x, py, pz, x, -py, -pz, x, dy * len - py, dz * len - pz);
+    }
   }
   const spokes = new THREE.BufferGeometry();
   spokes.setAttribute('position', new THREE.Float32BufferAttribute(spokePos, 3));
 
-  return { tire: flat(tire), hub, spokes: flat(spokes) };
+  return { tire: flat(tire), tread: flat(tread), hub, spokes: flat(spokes) };
 }
 
 /** 折纸动物车手：头 + 耳朵 + 口鼻 + 身体 + 双臂。 */
@@ -347,6 +371,9 @@ export function buildCarVisual(
   const tireMat = paperMaterial(0x3b3733, {
     map: paperTexture({ color: 0x3b3733, seed: seed + 3, fiber: 0.8, blotch: 0.3, creases: 0, key: 'tire' }),
   });
+  const treadMat = paperMaterial(0x2a2724, {
+    map: paperTexture({ color: 0x2a2724, seed: seed + 9, fiber: 1.0, blotch: 0.2, creases: 0, key: 'tread' }),
+  });
   const hubMat = paperMaterial(options.accentColor);
   const halfTrack = spec.trackWidth / 2;
   const halfBase = spec.wheelbase / 2;
@@ -357,10 +384,13 @@ export function buildCarVisual(
     pivot.position.set(side * halfTrack, -spec.suspensionRestLength + spec.targetStaticCompression, front ? halfBase : -halfBase);
     const spin = new THREE.Object3D();
     const tire = new THREE.Mesh(wheelGeo.tire, tireMat);
+    const tread = new THREE.Mesh(wheelGeo.tread, treadMat);
     const hub = new THREE.Mesh(wheelGeo.hub, hubMat);
     const spokes = new THREE.Mesh(wheelGeo.spokes, darkMat);
     tire.castShadow = quality === 'high';
+    tread.castShadow = quality === 'high';
     spin.add(tire);
+    spin.add(tread);
     spin.add(hub);
     spin.add(spokes);
     pivot.add(spin);
@@ -379,8 +409,10 @@ export function buildCarVisual(
   void originY;
   disposables.push(() => {
     wheelGeo.tire.dispose();
+    wheelGeo.tread.dispose();
     wheelGeo.hub.dispose();
     wheelGeo.spokes.dispose();
+    treadMat.dispose();
     bodyMat.dispose();
     accentMat.dispose();
     cardboardMat.dispose();

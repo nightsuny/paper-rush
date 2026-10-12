@@ -354,30 +354,53 @@ export class Car {
       }
       contactCount++;
 
-      // ---- 纵向请求：驱动 + 制动 + 滚动阻力 ----
+      // ---- 纵向请求：驱动 / 倒挡 / 制动 / 滚阻 / 驻车 ----
+      //
+      // 统一用一个"有符号的纵向力"来表达，并且**全部通过 engineForce 施加**：
+      // Rapier 的 engineForce 支持负值（反向推力），而 brake 参数只会在前进方向
+      // 上抵抗。早期版本把负的 request 交给 brake 参数，结果倒挡变成了刹车，
+      // 从静止永远退不了车。
+      const drivenCount = Math.max(this.derived.drivenWheels.length, 1);
       let request = this.driven[i] ? power.driveForce : 0;
+      if (request < 0 && power.gear === -1) {
+        // 倒挡单独限幅，避免倒挡比前进挡更有劲
+        request = Math.max(request, -spec.reverseForceLimit / drivenCount);
+      }
 
       let brakeForce = 0;
-      if (input.brake > 0) {
+      // 倒挡时刹车键是"后退踏板"，不能再当制动用，否则两个力互相抵消
+      if (input.brake > 0 && power.gear > 0) {
         const axleForce = isFront ? spec.brakeForceFront : spec.brakeForceRear;
         brakeForce = (axleForce / 2) * input.brake;
       }
       if (input.handbrake && !isFront) {
         brakeForce = Math.max(brakeForce, spec.handbrakeForceRear / 2);
       }
+      let resist = brakeForce;
+      if (input.handbrake && !isFront) {
+        resist += ws.normalLoad * spec.handbrakeDrag;
+      }
 
       const rollingCoef = spec.rollingResistance * surf.rollingScale;
       const rolling = rollingCoef * ws.normalLoad;
       rollingTotal += rolling;
+      resist += rolling;
 
-      // 制动与滚动阻力都抵抗当前运动方向
       const moving = Math.abs(forwardSpeed) > 0.15;
+      const wantsDrive = Math.abs(power.driveForce) > 1;
       if (moving) {
-        const resist = brakeForce + rolling;
-        request -= Math.sign(forwardSpeed) * resist;
-      } else if (brakeForce > 0) {
-        // 静止时制动只用来防止溜车，不反向推动
-        request -= Math.sign(request) * Math.min(brakeForce, Math.abs(request));
+        // 阻力抵抗运动方向，但不能在一帧内把车推向反向（否则松手即倒退/点头）
+        const maxStop = (spec.mass * Math.abs(forwardSpeed)) / (dt * WHEEL_COUNT);
+        request -= Math.sign(forwardSpeed) * Math.min(resist, maxStop);
+      } else if ((brakeForce > 0 || input.handbrake) && !wantsDrive) {
+        // 静止/极低速且没有驱动请求时，做**真正的驻车**：
+        // 施加"一步内彻底停住"所需的力（带一个速度下限作为静摩擦近似），
+        // 而不是粘滞阻尼 —— 粘滞阻尼只能把车拖成缓慢溜坡，
+        // 溜起来之后反而会触发倒挡判定，表现为"踩住刹车车自己往后退"。
+        // 这个力稍后会被摩擦圆裁剪，所以不会超过附着力上限。
+        const vEff = Math.max(Math.abs(forwardSpeed), spec.holdCreepSpeed);
+        const stopForce = (spec.mass * vEff) / (dt * WHEEL_COUNT);
+        request -= Math.sign(forwardSpeed || 1) * Math.min(stopForce, ws.normalLoad * 2.2);
       }
 
       // ---- 摩擦圆：横向已占用的附着不能再用于纵向 ----
@@ -400,26 +423,19 @@ export class Car {
         if (this.driven[i] && request > 0) ws.wheelspin = true;
       }
 
-      // 打滑时（动力过剩）有效摩擦下降 —— 惯性滑移导致抓地丧失
-      if (ws.wheelspin) {
-        mu *= 0.82;
-        this.vehicle.setWheelFrictionSlip(i, mu);
-      } else {
-        this.vehicle.setWheelFrictionSlip(i, mu);
-      }
+      // 打滑时（动力过剩）有效摩擦下降：摩擦系数从静摩擦掉到动摩擦，
+      // 这是"给油过度导致后轮失去抓地"的物理来源。
+      if (ws.wheelspin) mu *= 0.9;
+      this.vehicle.setWheelFrictionSlip(i, mu);
       ws.friction = mu;
 
       ws.longitudinalForce = applied;
       appliedTotal += applied;
 
-      if (applied >= 0) {
-        this.vehicle.setWheelEngineForce(i, applied);
-        this.vehicle.setWheelBrake(i, 0);
-      } else {
-        this.vehicle.setWheelEngineForce(i, 0);
-        // brake 参数单位为 N·s（每步最大制动冲量）
-        this.vehicle.setWheelBrake(i, -applied * dt);
-      }
+      // 全部走 engineForce（负值 = 倒挡推力），不再使用 brake 参数，
+      // 这样"制动"与"倒车"就不会互相抵消。
+      this.vehicle.setWheelEngineForce(i, applied);
+      this.vehicle.setWheelBrake(i, 0);
     }
 
     // ---- 5. 侧向力遥测 ----

@@ -146,6 +146,13 @@ export interface VehicleSpec {
   gravityScale: number;
   /** 手刹时后轮额外的纵向阻力系数。 */
   handbrakeDrag: number;
+  /**
+   * 驻车用的速度下限（m/s）：静止时按这个速度计算所需保持力，
+   * 相当于给静摩擦一个近似，让车在坡道上真正定住而不是缓慢溜车。
+   */
+  holdCreepSpeed: number;
+  /** 倒挡轮端牵引力上限 N（倒挡通常比前进挡更弱，也更需要受附着限制）。 */
+  reverseForceLimit: number;
 }
 
 /** 由主参数表换算出的、直接喂给 Rapier 的量。 */
@@ -233,6 +240,8 @@ export function validateVehicleSpec(spec: VehicleSpec): string[] {
   fix('手刹抓地倍率必须在 0.15–1.0', spec.handbrakeGripScale >= 0.15 && spec.handbrakeGripScale <= 1.0, () => (spec.handbrakeGripScale = clamp(spec.handbrakeGripScale, 0.15, 1.0)));
   fix('传动效率必须在 0.5–1.0', spec.drivetrainEfficiency >= 0.5 && spec.drivetrainEfficiency <= 1.0, () => (spec.drivetrainEfficiency = clamp(spec.drivetrainEfficiency, 0.5, 1.0)));
   fix('主减速比必须为正', spec.finalDrive > 0, () => (spec.finalDrive = Math.abs(spec.finalDrive) || 1));
+  fix('驻车速度下限必须在 0.02–2 m/s', spec.holdCreepSpeed >= 0.02 && spec.holdCreepSpeed <= 2, () => (spec.holdCreepSpeed = clamp(spec.holdCreepSpeed, 0.02, 2)));
+  fix('倒挡牵引力上限必须为正', spec.reverseForceLimit > 0, () => (spec.reverseForceLimit = Math.abs(spec.reverseForceLimit) || 1200));
   return notes;
 }
 

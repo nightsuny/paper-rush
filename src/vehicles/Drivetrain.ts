@@ -40,6 +40,8 @@ export class Drivetrain {
   private shiftTimer = 0;
   private throttleLagged = 0;
   private pendingGear = 0;
+  /** 静止计时：必须真正停稳一小段时间才挂倒挡 */
+  private stationaryFor = 0;
 
   constructor(derived: DerivedVehicle) {
     this.d = derived;
@@ -52,6 +54,7 @@ export class Drivetrain {
     this.shiftTimer = 0;
     this.throttleLagged = 0;
     this.pendingGear = 0;
+    this.stationaryFor = 0;
   }
 
   /**
@@ -123,11 +126,15 @@ export class Drivetrain {
     }
     const shifting = this.shiftTimer > 0;
 
-    // 倒挡判定：刹车按住且几乎停住
-    if (this.gear > 0 && input.brake > 0.5 && speed < 0.6 && this.throttleLagged < 0.2) {
+    // 倒挡判定：按住刹车键 + 真正停稳一小段时间才挂入。
+    // 只判断瞬时速度会导致：高速刹到 0.5 m/s 时突然挂上倒挡并输出全倒挡推力，
+    // 以及在坡上"踩住刹车却开始倒退"。
+    this.stationaryFor = Math.abs(speed) < 0.35 ? this.stationaryFor + dt : 0;
+    if (this.gear > 0 && input.brake > 0.5 && this.stationaryFor >= 0.25) {
       this.gear = -1;
-    } else if (this.gear === -1 && speed > -0.6 && input.brake < 0.1 && this.throttleLagged > 0.05) {
-      this.gear = 1;
+    } else if (this.gear === -1) {
+      // 退出倒挡：松开刹车并给油，或已经明显向前
+      if (speed > 0.5 || (input.brake < 0.1 && this.throttleLagged > 0.05)) this.gear = 1;
     }
 
     // 由车轮转速反推发动机转速
@@ -139,14 +146,17 @@ export class Drivetrain {
     this.rpm += (targetRpm - this.rpm) * Math.min(1, dt * 14);
     this.rpm = Math.min(this.rpm, s.engineRedlineRpm * 1.02);
 
-    if (shifting || this.gear === -1) {
+    if (this.gear === -1) {
+      // 倒挡：踏板映射与前进挡不同 —— 玩家按的是"刹车/后退"键，
+      // 所以用 max(油门, 刹车) 作为动力输入，否则挂上倒挡也不会有推力。
+      const pedal = Math.max(this.throttleLagged, input.brake);
+      const torque = this.torqueAt(this.rpm) * pedal;
+      const total = -(torque * ratio * s.finalDrive * s.drivetrainEfficiency) / s.wheelRadius;
+      return this.finish(total / driven, torque, false);
+    }
+    if (shifting) {
       // 换挡期间无牵引力
-      if (this.gear === -1) {
-        const torque = this.torqueAt(this.rpm) * this.throttleLagged;
-        const force = -(torque * ratio * s.finalDrive * s.drivetrainEfficiency) / s.wheelRadius;
-        return this.finish(force, torque * this.throttleLagged, shifting);
-      }
-      return this.finish(0, 0, shifting);
+      return this.finish(0, 0, true);
     }
 
     // 自动换挡

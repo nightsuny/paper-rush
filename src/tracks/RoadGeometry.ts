@@ -25,6 +25,10 @@ export interface RoadProfile {
   paperThickness: number;
   /** 路拱高度 */
   crown: number;
+  /** 路肩外侧过渡到路堤的宽度（米） */
+  vergeSlopeWidth: number;
+  /** 路堤相对路面的下沉量（米） */
+  vergeDrop: number;
   /** 路堤：路缘外侧平铺的纸带宽度（米） */
   apronWidth: number;
   /** 路堤内侧相对路面的下沉量（米） */
@@ -52,8 +56,6 @@ export interface RoadGeometryResult {
   wallRight: RibbonData;
   /** 用于碰撞的完整可行驶表面（p1..p5） */
   collision: { vertices: Float32Array; indices: Uint32Array };
-  /** 侧壁碰撞（p0-p1 / p5-p6），让车撞到路缘时有真实反馈 */
-  edgeWalls: { vertices: Float32Array; indices: Uint32Array };
   /** 路堤纸带：从路缘外侧平铺出去，盖住地形在赛道走廊里被挖掉的洞 */
   apronLeft: RibbonData;
   apronRight: RibbonData;
@@ -71,10 +73,12 @@ function makeProfile(config: TrackConfig): RoadProfile {
     kerbHeight: 0.055,
     paperThickness: config.paperThickness,
     crown: 0.004,
+    vergeSlopeWidth: 1.4,
+    vergeDrop: 0.1,
     apronWidth: 9,
-    apronDrop: 0.12,
+    apronDrop: 0.1,
     apronSkirtWidth: 2.6,
-    apronSkirtDrop: 0.40,
+    apronSkirtDrop: 0.38,
   };
 }
 
@@ -144,23 +148,36 @@ export function buildRoadGeometry(
   const kw = profile.kerbWidth;
   const kh = profile.kerbHeight;
   const th = profile.paperThickness;
+  const vsw = profile.vergeSlopeWidth;
+  const vd = profile.vergeDrop;
+  void th;
 
-  // 完整断面：p0..p6
+  // 完整断面（按 lateral 递增排列，保证绕序一致）。
+  //
+  //  0-----1           1/5: 路肩顶（与路面外沿重合）
+  //        |\  2---3---4   2/4: 路肩内沿（落在路面上）
+  //        路肩  路面          0/6: 路堤面
+  //
+  // 关键：路肩外沿到路堤之间用**缓坡**而不是竖直墙。
+  // 早期版本在这里放了一堵 0.2m 高的竖直壁，车一旦滑出赛道就再也爬不回来，
+  // 也会卡在边缘动不了。现在外侧坡度约 6.8°，进出都顺畅。
+  const kwIn = Math.max(kw, 0.2);
   const full = [
-    { lateral: -(hw + kw), dy: -th },
-    { lateral: -(hw + kw), dy: kh },
-    { lateral: -hw, dy: 0 },
+    { lateral: -(hw + vsw), dy: -vd },
+    { lateral: -hw, dy: kh },
+    { lateral: -(hw - kwIn), dy: 0 },
     { lateral: 0, dy: profile.crown },
-    { lateral: hw, dy: 0 },
-    { lateral: hw + kw, dy: kh },
-    { lateral: hw + kw, dy: -th },
+    { lateral: hw - kwIn, dy: 0 },
+    { lateral: hw, dy: kh },
+    { lateral: hw + vsw, dy: -vd },
   ];
 
   const samples = centerline.samples;
   const vRepeat = 12;
 
-  // 每个断面点对应的 u（用于贴图）
-  const u = (lat: number) => (lat + hw + kw) / (2 * (hw + kw));
+  // 路面贴图的 u：横向铺满"两侧路肩内沿之间"的路面
+  const roadHalf = hw - kwIn;
+  const u = (lat: number) => (lat + roadHalf) / (2 * roadHalf);
 
   const road = buildRibbon(
     samples,
@@ -169,60 +186,30 @@ export function buildRoadGeometry(
     vRepeat,
     true,
   );
-  const kerbLeft = buildRibbon(
-    samples,
-    [full[1], full[2]],
-    [0, 1],
-    3,
-    true,
-  );
-  const kerbRight = buildRibbon(
-    samples,
-    [full[4], full[5]],
-    [0, 1],
-    3,
-    true,
-  );
-  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 3, true);
-  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 3, true);
+  const kerbLeft = buildRibbon(samples, [full[1], full[2]], [0, 1], 3, true);
+  const kerbRight = buildRibbon(samples, [full[4], full[5]], [0, 1], 3, true);
+  // 路堤过渡坡（草地），把路肩外沿平顺接到路堤面
+  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 4, true);
+  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 4, true);
 
-  // 碰撞面：p1..p5（路肩外沿 → 路面 → 另一侧路肩），连续无孔洞
+  // 碰撞面：整个断面（含路肩与过渡坡），连续无孔洞、无台坎
   const collision = toTrimesh(
-    buildRibbon(
-      samples,
-      [full[1], full[2], full[3], full[4], full[5]],
-      [0, 0.25, 0.5, 0.75, 1],
-      vRepeat,
-      true,
-    ),
+    buildRibbon(samples, full, [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1], vRepeat, true),
   );
-  const edgeWalls = toTrimesh(
-    buildRibbon(samples, [full[0], full[1]], [0, 1], 3, true),
-  );
-  const edgeWalls2 = toTrimesh(
-    buildRibbon(samples, [full[5], full[6]], [0, 1], 3, true),
-  );
-
-  // 路堤：路缘外沿 → 平铺纸带 → 收边，形成"纸板赛道压在一张桌子上"的边缘
-  const kerbOuterLeft = full[0];
-  const kerbOuterRight = full[6];
-  const apronInner = profile.apronDrop;
+  // 路堤：过渡坡外沿 → 平铺纸带 → 收边，形成"纸板赛道压在一张桌子上"的边缘
   const apronOuter = profile.apronDrop;
   const apronEnd = profile.apronSkirtDrop;
   const apronFar = profile.apronWidth + profile.apronSkirtWidth;
   // 断面点一律按 lateral 递增排列，保证绕序一致（法线朝上）
-  const bands = [
-    { lateral: 0.6, dy: -apronInner, u: 0.1 },
-    { lateral: profile.apronWidth, dy: -apronOuter, u: 0.8 },
-    { lateral: apronFar, dy: -apronEnd, u: 1 },
-  ];
+  const apronInnerLat = hw + vsw;
+  // 路堤从"过渡坡外沿"开始，高度与断面 full[0] 完全一致（无缝、无台坎）
   const apronLeft = buildRibbon(
     samples,
     [
-      { lateral: -(hw + kw + apronFar), dy: -apronEnd },
-      { lateral: -(hw + kw + profile.apronWidth), dy: -apronOuter },
-      { lateral: -(hw + kw + 0.6), dy: -apronInner },
-      { lateral: -(hw + kw), dy: -profile.paperThickness },
+      { lateral: -(apronInnerLat + apronFar), dy: -apronEnd },
+      { lateral: -(apronInnerLat + profile.apronWidth), dy: -apronOuter },
+      { lateral: -(apronInnerLat + 0.8), dy: -apronOuter },
+      { lateral: -apronInnerLat, dy: -vd },
     ],
     [0, 0.2, 0.9, 1],
     8,
@@ -231,26 +218,25 @@ export function buildRoadGeometry(
   const apronRight = buildRibbon(
     samples,
     [
-      { lateral: hw + kw, dy: -profile.paperThickness },
-      { lateral: hw + kw + 0.6, dy: -apronInner },
-      { lateral: hw + kw + profile.apronWidth, dy: -apronOuter },
-      { lateral: hw + kw + apronFar, dy: -apronEnd },
+      { lateral: apronInnerLat, dy: -vd },
+      { lateral: apronInnerLat + 0.8, dy: -apronOuter },
+      { lateral: apronInnerLat + profile.apronWidth, dy: -apronOuter },
+      { lateral: apronInnerLat + apronFar, dy: -apronEnd },
     ],
     [0, 0.1, 0.8, 1],
     8,
     true,
   );
   const apronCollisionBand = [
-    { lateral: -(hw + kw + apronFar), dy: -apronEnd },
-    { lateral: -(hw + kw + profile.apronWidth), dy: -apronOuter },
-    { lateral: -(hw + kw + 0.2), dy: -apronInner },
+    { lateral: -(apronInnerLat + apronFar), dy: -apronEnd },
+    { lateral: -(apronInnerLat + profile.apronWidth), dy: -apronOuter },
+    { lateral: -apronInnerLat, dy: -vd },
   ];
   const apronCollisionBandRight = [
-    { lateral: hw + kw + 0.2, dy: -apronInner },
-    { lateral: hw + kw + profile.apronWidth, dy: -apronOuter },
-    { lateral: hw + kw + apronFar, dy: -apronEnd },
+    { lateral: apronInnerLat, dy: -vd },
+    { lateral: apronInnerLat + profile.apronWidth, dy: -apronOuter },
+    { lateral: apronInnerLat + apronFar, dy: -apronEnd },
   ];
-  void bands;
   const a1 = toTrimesh(buildRibbon(samples, apronCollisionBand, [0, 0.8, 1], 8, true));
   const a2 = toTrimesh(buildRibbon(samples, apronCollisionBandRight, [0, 0.2, 1], 8, true));
   const apronVerts = new Float32Array(a1.vertices.length + a2.vertices.length);
@@ -262,20 +248,8 @@ export function buildRoadGeometry(
   for (let i = 0; i < a2.indices.length; i++) {
     apronIdx[a1.indices.length + i] = a2.indices[i] + apronOffset;
   }
-  void kerbOuterLeft;
-  void kerbOuterRight;
 
   // 合并两侧侧壁
-  const wallVerts = new Float32Array(edgeWalls.vertices.length + edgeWalls2.vertices.length);
-  wallVerts.set(edgeWalls.vertices, 0);
-  wallVerts.set(edgeWalls2.vertices, edgeWalls.vertices.length);
-  const offset = edgeWalls.vertices.length / 3;
-  const wallIdx = new Uint32Array(edgeWalls.indices.length + edgeWalls2.indices.length);
-  wallIdx.set(edgeWalls.indices, 0);
-  for (let i = 0; i < edgeWalls2.indices.length; i++) {
-    wallIdx[edgeWalls.indices.length + i] = edgeWalls2.indices[i] + offset;
-  }
-
   return {
     road,
     kerbLeft,
@@ -283,12 +257,11 @@ export function buildRoadGeometry(
     wallLeft,
     wallRight,
     collision,
-    edgeWalls: { vertices: wallVerts, indices: wallIdx },
     apronLeft,
     apronRight,
     apronCollision: { vertices: apronVerts, indices: apronIdx },
     // 地形网格在这个半径内不能有三角面，否则插值误差会让地面穿出路面
-    corridorCutRadius: hw + kw + apronFar,
+    corridorCutRadius: apronInnerLat + apronFar,
     totalLength: centerline.totalLength,
   };
 }
@@ -310,10 +283,22 @@ export function ribbonToGeometry(ribbon: RibbonData): THREE.BufferGeometry {
 export interface GuardrailData {
   postPositions: Float32Array;
   postRotations: Float32Array;
-  /** 横栏条带：上沿与下沿两排顶点 */
-  railRibbon: RibbonData;
-  /** 用于碰撞的盒体（中心点 + 半长 + 朝向） */
-  boxes: Array<{ x: number; y: number; z: number; heading: number; halfLength: number; halfHeight: number; halfThickness: number }>;
+  /**
+   * 护栏盒体。`visual*` 用于渲染（栏板），`collider*` 用于物理：
+   * 碰撞体比可见栏板更深地埋进地面，避免栏板底下留出缝隙
+   * —— 有缝隙时车轮会别进去，表现为"卡在赛道边缘动不了"。
+   */
+  boxes: Array<{
+    x: number;
+    y: number;
+    z: number;
+    heading: number;
+    halfLength: number;
+    visualHalfHeight: number;
+    colliderCenterY: number;
+    colliderHalfHeight: number;
+    halfThickness: number;
+  }>;
 }
 
 export function buildGuardrails(config: TrackConfig, centerline: Centerline): GuardrailData {
@@ -321,11 +306,12 @@ export function buildGuardrails(config: TrackConfig, centerline: Centerline): Gu
   const samples = centerline.samples;
   const n = samples.length;
   const postSpacing = 4;
-  const railHeight = 0.62;
+  const railHeight = 0.6;
+  /** 碰撞体在可见栏板下方额外延伸的深度（米） */
+  const railBuryDepth = 0.45;
   const railThickness = 0.12;
   const posts: number[] = [];
   const rotations: number[] = [];
-  const railProfile: Array<{ lateral: number; dy: number }> = [];
   const boxes: GuardrailData['boxes'] = [];
 
   const idxForT = (t: number) => {
@@ -346,9 +332,7 @@ export function buildGuardrails(config: TrackConfig, centerline: Centerline): Gu
         const i = (i0 + k) % n;
         const s = samples[i];
         const sign = side === 'right' ? 1 : -1;
-        const lat = sign * (s.halfWidth + g.offset - s.halfWidth);
         const lateral = sign * g.offset;
-        void lat;
         const px = s.x + s.rx * lateral;
         const py = s.y + s.ry * lateral;
         const pz = s.z + s.rz * lateral;
@@ -371,25 +355,26 @@ export function buildGuardrails(config: TrackConfig, centerline: Centerline): Gu
         const dx = bx - ax;
         const dz = bz - az;
         const len = Math.hypot(dx, dz);
+        const midY = (ay + by) / 2;
         boxes.push({
           x: (ax + bx) / 2,
-          y: (ay + by) / 2 + railHeight / 2,
+          y: midY + railHeight / 2,
           z: (az + bz) / 2,
           heading: Math.atan2(dx, dz),
           halfLength: Math.max(len / 2 - 0.02, 0.1),
-          halfHeight: railHeight / 2,
+          visualHalfHeight: railHeight / 2,
+          // 碰撞体中心下移，使其底边埋到路面以下 railBuryDepth
+          colliderCenterY: midY + railHeight / 2 - railBuryDepth / 2,
+          colliderHalfHeight: railHeight / 2 + railBuryDepth / 2,
           halfThickness: railThickness / 2,
         });
       }
     }
   }
 
-  void railProfile;
-
   return {
     postPositions: new Float32Array(posts),
     postRotations: new Float32Array(rotations),
-    railRibbon: { positions: new Float32Array(0), uvs: new Float32Array(0), indices: new Uint32Array(0) },
     boxes,
   };
 }

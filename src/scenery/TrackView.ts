@@ -173,7 +173,7 @@ export function buildTrackView(
     track.guardrails.boxes.forEach((b, i) => {
       dummy.position.set(b.x, b.y, b.z);
       dummy.rotation.set(0, b.heading, 0);
-      dummy.scale.set(b.halfThickness * 2, b.halfHeight * 2, b.halfLength * 2);
+      dummy.scale.set(b.halfThickness * 2, b.visualHalfHeight * 2, b.halfLength * 2);
       dummy.updateMatrix();
       rails.setMatrixAt(i, dummy.matrix);
     });
@@ -350,8 +350,8 @@ function buildStartGantry(track: BuiltTrack, theme: TrackTheme, seed: number): T
   const cl = track.centerline;
   const gate = track.startGate;
   const postMat = paperMaterial(0xd8cfb4, { map: cardboardTexture(0xd8cfb4, seed + 29) });
-  const beamMap = checkerTexture(10);
-  beamMap.repeat.set(3, 0.22);
+  const beamMap = checkerTexture(1);
+  beamMap.repeat.set(24, 1);
   const beamMat = paperMaterial(0xffffff, { map: beamMap });
   const w = track.config.width / 2 + 1.6;
   const h = 6.4;
@@ -373,15 +373,18 @@ function buildStartGantry(track: BuiltTrack, theme: TrackTheme, seed: number): T
   beam.castShadow = true;
   g.add(beam);
 
-  // 地面黑白格
-  const lineGeo = new THREE.PlaneGeometry(track.config.width, 2.4);
-  const lineMap = checkerTexture(12);
-  // 贴图有 12×12 格；横向 12 格铺满 12 米路宽 → 每格 1 米，纵向按比例压缩
-  lineMap.repeat.set(1, 2.4 / track.config.width);
+  // 地面黑白格。
+  // 注意：必须先把**几何**绕 X 摆平，再只用 rotation.y 对准赛道方向。
+  // 直接写 rotation.set(-PI/2, 0, yaw) 会因为欧拉角 XYZ 的顺序（先 Z 后 X）
+  // 让格纹在路面上整体歪掉 —— 这正是之前"起点黑白格是歪的"的原因。
+  const lineGeo = new THREE.PlaneGeometry(track.config.width, 2.6);
+  lineGeo.rotateX(-Math.PI / 2);
+  const lineMap = checkerTexture(1);
+  lineMap.repeat.set(track.config.width, 2.6);
   const lineMat = paperMaterial(0xffffff, { map: lineMap });
   const line = new THREE.Mesh(lineGeo, lineMat);
-  line.rotation.set(-Math.PI / 2, 0, -Math.atan2(sample.tx, sample.tz));
-  line.position.set(gate.x, gate.y + 0.02, gate.z);
+  line.rotation.y = Math.atan2(sample.tx, sample.tz);
+  line.position.set(gate.x, gate.y + 0.025, gate.z);
   g.add(line);
 
   // 龙门架上的纸牌

@@ -100,8 +100,9 @@ describe('赛道几何', () => {
     // 三角网格顶点数 = 采样数 × 断面点数
     const n = builder.centerline.samples.length;
     // 条带为了闭合会多出一行顶点
-    expect(road.collision.vertices.length).toBe((n + 1) * 5 * 3);
-    expect(road.collision.indices.length).toBe(n * 4 * 6);
+    // 碰撞面用完整断面（7 个断面点）
+    expect(road.collision.vertices.length).toBe((n + 1) * 7 * 3);
+    expect(road.collision.indices.length).toBe(n * 6 * 6);
 
     // 路面高度必须有真实起伏（不是无限平面）
     const ys = builder.centerline.samples.map((s) => s.y);
@@ -233,40 +234,99 @@ describe('赛道几何', () => {
     expect(maxLat).toBeGreaterThan(t.corridorCutRadius - 3);
   });
 
-  it('护栏能挡住车（碰撞不是视觉效果）', () => {
+  it('护栏能挡住车（碰撞不是视觉效果，且底部没有缝隙可钻）', () => {
     const d = deriveVehicle(STOCK_KART);
     const world = new PhysicsWorld(-d.gravity);
     const builder = new TrackBuilder(MEADOW, world);
-    // 找一段有护栏的位置
-    const rail = MEADOW.guardrails[0];
     const cl = builder.centerline;
-    const s = cl.sampleAt((rail.from + rail.to) / 2);
-    const side = rail.side === 'both' ? 1 : rail.side === 'right' ? 1 : -1;
-    const startLat = side * 2;
+    const rail = MEADOW.guardrails.find((g) => g.side !== 'both') ?? MEADOW.guardrails[0];
+    const t = (rail.from + rail.to) / 2;
+    const side = rail.side === 'left' ? -1 : 1;
+    const s = cl.sampleAt(t);
     const heading = Math.atan2(s.tx, s.tz);
+
     const car = new Car({
       spec: STOCK_KART,
       world,
-      position: { x: s.x + s.rx * startLat, y: s.y + 0.3, z: s.z + s.rz * startLat },
+      position: { x: s.x, y: s.y + 0.35, z: s.z },
       heading,
     });
-    // 稳定后朝护栏方向全油门
     for (let i = 0; i < 90; i++) {
       car.step(PHYSICS_DT, { throttle: 0, brake: 0, steer: 0, handbrake: false });
       world.step();
     }
-    const targetLat = side * 20;
-    for (let i = 0; i < 60 * 5; i++) {
-      car.step(PHYSICS_DT, { throttle: 0.85, brake: 0, steer: side * 1, handbrake: false });
+
+    // 朝护栏方向持续给油（正转向 = 左转，所以朝右侧开要打负转向）
+    for (let i = 0; i < 60 * 8; i++) {
+      car.step(PHYSICS_DT, { throttle: 0.8, brake: 0, steer: -side, handbrake: false });
       world.step();
     }
     const p = car.position;
     const proj = cl.project(p.x, p.z, p.y);
     console.log(
-      `[实测] 冲向护栏 5s 后：横向偏移=${proj.lateral.toFixed(2)}m（护栏在 ${side * rail.offset}m）速度=${(car.telemetry.speed * 3.6).toFixed(1)}km/h ` +
-        `目标方向=${targetLat.toFixed(0)}`,
+      `[实测] 全油门冲向护栏 8s：横向偏移=${proj.lateral.toFixed(2)}m（护栏在 ${side * rail.offset} m）` +
+        `速度=${(car.telemetry.speed * 3.6).toFixed(1)}km/h 离地高度=${car.telemetry.groundHeight.toFixed(2)}m`,
     );
-    // 必须被护栏拦在赛道范围内（不能跑到护栏外面）
-    expect(Math.abs(proj.lateral)).toBeLessThan(rail.offset + 2.5);
+    // 必须被挡在护栏内侧，且不能钻到护栏下面
+    expect(Math.abs(proj.lateral)).toBeLessThan(rail.offset + 2.0);
+    expect(car.telemetry.groundHeight).toBeGreaterThan(0.05);
+  });
+
+  it('滑出赛道后能从草地上开回赛道（边缘不存在不可翻越的台阶）', () => {
+    const d = deriveVehicle(STOCK_KART);
+    const world = new PhysicsWorld(-d.gravity);
+    const builder = new TrackBuilder(MEADOW, world);
+    const cl = builder.centerline;
+
+    // 找一段没有护栏的位置，避免测的是"被护栏挡住"而不是"台阶挡住"
+    let t = 0.3;
+    for (let i = 0; i < 600; i++) {
+      const cand = 0.3 + i * 0.001;
+      if (cand > 0.99) break;
+      const covered = MEADOW.guardrails.some((g) => cand >= g.from && cand <= g.to);
+      if (!covered) {
+        t = cand;
+        break;
+      }
+    }
+    const s0 = cl.sampleAt(t);
+    const heading = Math.atan2(s0.tx, s0.tz);
+    const startLat = -12;
+    const start = cl.pointAt(t, startLat);
+    const car = new Car({
+      spec: STOCK_KART,
+      world,
+      position: { x: start.x, y: start.y + 0.5, z: start.z },
+      heading,
+    });
+    for (let i = 0; i < 90; i++) {
+      car.step(PHYSICS_DT, { throttle: 0, brake: 0, steer: 0, handbrake: false });
+      world.step();
+    }
+    const latBefore = cl.project(car.position.x, car.position.z, car.position.y).lateral;
+
+    // 纯追踪把车开回中心线（常量打舵只会原地绕圈，测不出东西）
+    const total = cl.totalLength;
+    for (let i = 0; i < 60 * 8; i++) {
+      const p = car.position;
+      const proj = cl.project(p.x, p.z, p.y);
+      const tgt = cl.pointAt(proj.t + 15 / total, 0);
+      const fwd = car.forward;
+      const rgt = car.right;
+      const dx = tgt.x - p.x;
+      const dz = tgt.z - p.z;
+      const lf = dx * fwd.x + dz * fwd.z;
+      const lr = dx * rgt.x + dz * rgt.z;
+      const steer = Math.max(-1, Math.min(1, Math.atan2(-lr, Math.max(lf, 1)) * 1.6));
+      car.step(PHYSICS_DT, { throttle: 0.5, brake: 0, steer, handbrake: false });
+      world.step();
+    }
+    const proj = cl.project(car.position.x, car.position.z, car.position.y);
+    console.log(
+      `[实测] 从草地开回赛道：横向偏移 ${latBefore.toFixed(2)} → ${proj.lateral.toFixed(2)} m ` +
+        `（道路半宽 ${proj.halfWidth} m）速度=${(car.telemetry.speed * 3.6).toFixed(1)}km/h 路面=${car.telemetry.surface?.id}`,
+    );
+    expect(Math.abs(proj.lateral)).toBeLessThan(proj.halfWidth);
+    expect(car.telemetry.speed).toBeGreaterThan(3);
   });
 });

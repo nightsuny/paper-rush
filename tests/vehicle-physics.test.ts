@@ -366,6 +366,67 @@ describe('车辆物理（真实 Rapier 求解，非模拟）', () => {
     expect(spread).toBeLessThan(0.02);
   });
 
+  it('倒挡可用：从静止按住刹车/后退键会真的向后走', () => {
+    const h = harness();
+    h.run(240, {});
+    // 按住刹车（低速时进入倒挡）
+    h.run(60 * 3, { brake: 1 });
+    const tel = h.car.telemetry;
+    console.log(
+      `[实测] 倒挡：挡位=${tel.gear} 前向速度=${tel.forwardSpeed.toFixed(2)} m/s（负值表示后退）`,
+    );
+    expect(tel.gear).toBe(-1);
+    expect(tel.forwardSpeed).toBeLessThan(-1.5);
+  });
+
+  it('坡道驻车：拉住手刹时车辆不会自己溜下坡（发车不倒退）', () => {
+    // 造一个 8% 的斜坡，车头朝上坡
+    const derived = deriveVehicle(STOCK_KART);
+    const world = new PhysicsWorld(-derived.gravity);
+    const slope = 0.08;
+    const gb = world.createStaticBody(0, 0, 0);
+    const half = -Math.atan(slope) / 2;
+    const q = new R.Quaternion(Math.sin(half), 0, 0, Math.cos(half));
+    world.addStaticCollider(
+      gb,
+      R.ColliderDesc.cuboid(3000, 0.5, 3000).setTranslation(0, -0.5, 0).setRotation(q).setFriction(0.9),
+      surfaceById('asphalt'),
+    );
+    const car = new Car({
+      spec: STOCK_KART,
+      world,
+      position: { x: 0, y: derived.rideHeight + 0.1, z: 0 },
+      heading: 0,
+    });
+
+    // 对照组：不拉手刹，5 秒应该明显溜坡（证明坡是真的）
+    const free = new Car({
+      spec: STOCK_KART,
+      world,
+      position: { x: 60, y: derived.rideHeight + 0.1, z: 0 },
+      heading: 0,
+    });
+    const freeZ0 = free.position.z;
+    for (let s = 0; s < 60 * 5; s++) {
+      free.step(PHYSICS_DT, { throttle: 0, brake: 0, steer: 0, handbrake: false });
+      world.step();
+    }
+    const freeDrift = Math.abs(free.position.z - freeZ0);
+
+    // 实验组：拉住手刹（倒计时期间游戏就是这么做的）
+    const z0 = car.position.z;
+    for (let s = 0; s < 60 * 5; s++) {
+      car.step(PHYSICS_DT, { throttle: 0, brake: 0, steer: 0, handbrake: true });
+      world.step();
+    }
+    const drift = Math.abs(car.position.z - z0);
+    console.log(
+      `[实测] 8% 坡：不拉手刹 5 秒滑 ${freeDrift.toFixed(2)} m；拉住手刹滑 ${drift.toFixed(3)} m（速度 ${car.telemetry.speed.toFixed(3)} m/s）`,
+    );
+    expect(freeDrift).toBeGreaterThan(2); // 坡确实会让车溜
+    expect(drift).toBeLessThan(0.5); // 拉住手刹必须站住
+  });
+
   it('重置后回到出生点且状态清零', () => {
     const h = harness();
     h.run(300, {});
