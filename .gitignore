@@ -29,3 +29,6 @@ coverage/
 
 # 开发工具的临时产物（tools/track-lab.mjs --emit 的输出）
 tools/emit-*.txt
+
+# 一次性补丁脚本（用完即删，不入库）
+tools/patch*.py
