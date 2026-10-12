@@ -1,0 +1,31 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 日志
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 编辑器 / 操作系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地环境
+.env
+.env.*
+!.env.example
+
+# 测试与覆盖率
+coverage/
+.nyc_output/
+
+# 开发工具的临时产物（tools/track-lab.mjs --emit 的输出）
+tools/emit-*.txt

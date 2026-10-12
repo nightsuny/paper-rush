@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>纸上狂飙 Paper Rush</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <!-- 撕边滤镜：用湍流 + 位移把矩形卡纸的边缘"撕"出毛边，全局复用 -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <filter id="torn-edge" x="-6%" y="-6%" width="112%" height="112%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.028 0.041" numOctaves="4" seed="7" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="7" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+      <filter id="torn-edge-soft" x="-4%" y="-4%" width="108%" height="108%">
+        <feTurbulence type="fractalNoise" baseFrequency="0.02 0.03" numOctaves="3" seed="19" result="noise2" />
+        <feDisplacementMap in="SourceGraphic" in2="noise2" scale="4" xChannelSelector="R" yChannelSelector="G" />
+      </filter>
+    </svg>
+
+    <div id="app">
+      <canvas id="view"></canvas>
+      <div id="ui"></div>
+      <div id="boot">正在剪纸…… 加载中</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

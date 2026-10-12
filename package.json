@@ -1,0 +1,25 @@
+{
+  "name": "paper-rush",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Paper Rush (纸上狂飙) - 纯代码生成的 3D 纸艺赛车游戏",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "0.186.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
+  }
+}
