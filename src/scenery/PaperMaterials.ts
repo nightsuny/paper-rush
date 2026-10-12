@@ -514,3 +514,44 @@ export function makeSignTexture(opts: {
   textureCache.set(key, tex);
   return tex;
 }
+
+/**
+ * 车门上的号码圆牌：白底圆 + 彩色圆环 + 黑字号码（透明背景）。
+ * 用于给赛车一个可辨认的"编号"，也让纸艺车更像玩具。
+ */
+export function makeRoundelTexture(number: number, ringColor = 0xc33a2f): THREE.CanvasTexture {
+  const key = `roundel-${number}-${ringColor}`;
+  const cached = textureCache.get(key);
+  if (cached) return cached as THREE.CanvasTexture;
+  const size = 128;
+  const { c, ctx } = canvas(size);
+  const cx = size / 2;
+  ctx.clearRect(0, 0, size, size);
+  // 白底
+  ctx.fillStyle = '#f8f4e8';
+  ctx.beginPath();
+  ctx.arc(cx, cx, size * 0.46, 0, Math.PI * 2);
+  ctx.fill();
+  // 彩色圆环
+  ctx.strokeStyle = cssColor(ringColor);
+  ctx.lineWidth = size * 0.08;
+  ctx.beginPath();
+  ctx.arc(cx, cx, size * 0.4, 0, Math.PI * 2);
+  ctx.stroke();
+  // 号码
+  ctx.fillStyle = '#2f2a24';
+  ctx.font = `900 ${Math.round(size * 0.52)}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(number), cx, cx + size * 0.03);
+  // 纸面颗粒
+  for (let i = 0; i < 160; i++) {
+    ctx.fillStyle = `rgba(90,74,52,${Math.random() * 0.06})`;
+    ctx.fillRect(Math.random() * size, Math.random() * size, 2, 1);
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  textureCache.set(key, tex);
+  return tex;
+}

@@ -134,6 +134,7 @@ export class Game {
     this.menu = new Menu(
       MEADOW,
       this.validation.stats,
+      this.track.minimap.points,
       { quality: this.settings.quality, showDebug: this.settings.showDebug },
       {
         onStart: () => this.startRace(),
@@ -254,6 +255,7 @@ export class Game {
       species: 'bear',
       bodyColor: 0xe8a92b,
       accentColor: 0xcf5b4a,
+      number: 7,
       seed: 913,
       quality: settings.quality,
     });
@@ -371,6 +373,7 @@ export class Game {
       species: this.driver,
       bodyColor: 0xe8a92b,
       accentColor: 0xcf5b4a,
+      number: 7,
       seed: 913,
       quality: this.settings.quality,
     });

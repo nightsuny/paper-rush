@@ -4,6 +4,7 @@ import { createRng, range } from '../game/random';
 import {
   addOutline,
   cardboardTexture,
+  makeRoundelTexture,
   outlineMaterial,
   paperMaterial,
   paperTexture,
@@ -256,6 +257,8 @@ export function buildCarVisual(
     species: DriverSpecies;
     bodyColor: number;
     accentColor: number;
+    /** 车身上的号码 */
+    number?: number;
     seed?: number;
     quality?: 'high' | 'low';
   },
@@ -283,87 +286,141 @@ export function buildCarVisual(
 
   const hw = spec.bodyHalfWidth;
   const hl = spec.bodyHalfLength;
-  const hh = spec.bodyHalfHeight;
   const originY = 0.0; // 视觉根节点位于刚体原点（重心高度）
 
-  // ---------- 底盘纸盒 ----------
-  const chassis = new THREE.Mesh(flat(new THREE.BoxGeometry(hw * 2, hh * 1.05, hl * 2)), cardboardMat);
-  chassis.position.set(0, -0.13, 0.02);
-  chassis.castShadow = true;
-  root.add(chassis);
+  // ===========================================================================
+  // 车身：分层纸盒结构。每一层都是独立的一片纸板，边缘可见、层间有折缝。
+  // 全部挂在 bodyGroup 上，这样真实的俯仰/侧倾只作用在车身（车轮不跟着倾）。
+  // ===========================================================================
+  const bodyGroup = new THREE.Group();
+  root.add(bodyGroup);
 
-  // ---------- 车身外壳（略小的纸板壳，露出底盘边缘，形成层次） ----------
-  const shell = new THREE.Mesh(flat(new THREE.BoxGeometry(hw * 1.9, hh * 0.72, hl * 1.82)), bodyMat);
-  shell.position.set(0, -0.045, 0.01);
-  shell.castShadow = true;
-  root.add(shell);
-  addOutline(shell, 0.035, root, outlineMat);
+  const wheelR = spec.wheelRadius;
+  const bodyBottom = -0.235; // 车身底面相对刚体原点（≈ 离地 0.13 m）
+  const deckY = -0.055; // 底盘上表面
 
-  // ---------- 折角挡风板 ----------
+  const addBox = (
+    w: number, h: number, d: number,
+    x: number, y: number, z: number,
+    mat: THREE.Material, outline = true,
+  ): THREE.Mesh => {
+    const m = new THREE.Mesh(flat(new THREE.BoxGeometry(w, h, d)), mat);
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    bodyGroup.add(m);
+    if (outline) addOutline(m, 0.022, bodyGroup, outlineMat);
+    return m;
+  };
+
+  // 1) 底盘平板：比车身略宽，露出一圈纸板唇边
+  addBox(hw * 2.04, 0.1, hl * 2.02, 0, bodyBottom + 0.05, 0, cardboardMat);
+
+  // 2) 车身主体：主要的色块
+  const shellH = 0.2;
+  const shell = addBox(hw * 1.98, shellH, hl * 1.9, 0, deckY + shellH / 2, 0.005, bodyMat);
+
+  // 3) 引擎盖 + 前沿折面
+  addBox(hw * 1.86, 0.055, hl * 0.62, 0, deckY + shellH + 0.03, hl * 0.46, bodyMat);
+  const noseFold = new THREE.Mesh(flat(new THREE.BoxGeometry(hw * 1.86, 0.05, 0.16)), bodyMat);
+  noseFold.position.set(0, deckY + shellH + 0.005, hl * 0.78);
+  noseFold.rotation.x = -0.28;
+  noseFold.castShadow = true;
+  bodyGroup.add(noseFold);
+
+  // 4) 座舱围板（敞篷卡丁车的开口）
+  for (const side of [-1, 1]) {
+    addBox(0.05, 0.26, hl * 0.86, side * (hw * 0.72), deckY + shellH + 0.13, -hl * 0.12, accentMat, false);
+  }
+  addBox(hw * 1.5, 0.24, 0.055, 0, deckY + shellH + 0.12, -hl * 0.55, accentMat, false);
+  addBox(hw * 1.4, 0.03, hl * 0.8, 0, deckY + shellH + 0.02, -hl * 0.12, darkMat, false);
+
+  // 5) 折叠挡风板（含纸板厚度）
+  const cowlH = 0.3;
+  const zFront = hl * 0.5;
   const cowlPos: number[] = [];
-  const w2 = hw * 0.86;
-  const cowlH = 0.30;
-  const zFront = hl * 0.62;
   const quad = (a: number[], b: number[], c: number[], d: number[]) => {
     cowlPos.push(...a, ...b, ...c, ...a, ...c, ...d);
   };
-  quad(
-    [-w2, -0.02, zFront],
-    [w2, -0.02, zFront],
-    [w2 * 0.94, cowlH, zFront - 0.1],
-    [-w2 * 0.94, cowlH, zFront - 0.1],
-  );
-  quad(
-    [w2, -0.02, zFront],
-    [-w2, -0.02, zFront],
-    [-w2 * 0.94, cowlH, zFront - 0.1],
-    [w2 * 0.94, cowlH, zFront - 0.1],
-  );
+  quad([-hw * 0.82, 0, zFront], [hw * 0.82, 0, zFront], [hw * 0.74, cowlH, zFront - 0.09], [-hw * 0.74, cowlH, zFront - 0.09]);
+  quad([hw * 0.82, 0, zFront], [-hw * 0.82, 0, zFront], [-hw * 0.74, cowlH, zFront - 0.09], [hw * 0.74, cowlH, zFront - 0.09]);
+  quad([hw * 0.74, cowlH, zFront - 0.09], [-hw * 0.74, cowlH, zFront - 0.09], [-hw * 0.74, cowlH, zFront - 0.13], [hw * 0.74, cowlH, zFront - 0.13]);
   const cowlGeo = new THREE.BufferGeometry();
   cowlGeo.setAttribute('position', new THREE.Float32BufferAttribute(cowlPos, 3));
   const cowl = new THREE.Mesh(flat(cowlGeo), accentMat);
+  cowl.position.y = deckY + shellH + 0.025;
   cowl.castShadow = true;
-  root.add(cowl);
+  bodyGroup.add(cowl);
+  addOutline(cowl, 0.02, bodyGroup, outlineMat);
 
-  // ---------- 侧裙 / 纸板折边 ----------
-  for (const s of [-1, 1]) {
-    const skirt = new THREE.Mesh(flat(new THREE.BoxGeometry(0.045, 0.10, hl * 1.55)), accentMat);
-    skirt.position.set(s * (hw * 0.97), -0.15, 0.0);
-    root.add(skirt);
+  // 6) 号码圆牌 + 侧板折痕
+  const roundelMat = new THREE.MeshBasicMaterial({
+    map: makeRoundelTexture(options.number ?? 7),
+    transparent: true,
+    side: THREE.DoubleSide,
+  });
+  for (const side of [-1, 1]) {
+    const roundel = new THREE.Mesh(new THREE.CircleGeometry(0.19, 20), roundelMat);
+    roundel.position.set(side * (hw * 1.005), deckY + 0.1, -hl * 0.18);
+    roundel.rotation.y = side * (Math.PI / 2);
+    bodyGroup.add(roundel);
+    const crease = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, hl * 1.5), accentMat);
+    crease.position.set(side * (hw * 0.99), deckY + shellH - 0.012, 0);
+    bodyGroup.add(crease);
   }
 
-  // ---------- 座椅 + 方向盘 ----------
-  const seat = new THREE.Mesh(flat(new THREE.BoxGeometry(0.42, 0.20, 0.34)), darkMat);
-  seat.position.set(0, 0.085, -0.16);
-  root.add(seat);
-  const wheelRing = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.022, 5, 10), darkMat);
-  wheelRing.position.set(0, 0.30, 0.16);
-  wheelRing.rotation.x = 0.35;
-  root.add(wheelRing);
-  const steerColumn = new THREE.Mesh(flat(new THREE.CylinderGeometry(0.022, 0.022, 0.3, 5)), cardboardMat);
-  steerColumn.position.set(0, 0.2, 0.22);
-  steerColumn.rotation.x = 0.5;
-  root.add(steerColumn);
+  // 7) 前灯
+  const lampMat = paperMaterial(0xfdf6dc, { emissive: 0xf6e7a8 });
+  for (const side of [-1, 1]) {
+    const lamp = new THREE.Mesh(new THREE.CircleGeometry(0.075, 12), lampMat);
+    lamp.position.set(side * hw * 0.62, deckY + shellH + 0.005, hl * 0.95);
+    bodyGroup.add(lamp);
+  }
 
-  // ---------- 车手 ----------
+  // 8) 排气管 + 防滚架
+  const pipe = new THREE.Mesh(flat(new THREE.CylinderGeometry(0.032, 0.032, 0.22, 7)), cardboardMat);
+  pipe.rotation.x = Math.PI / 2;
+  pipe.position.set(hw * 0.5, deckY - 0.02, -hl * 0.95);
+  bodyGroup.add(pipe);
+  const hoop = new THREE.Mesh(flat(new THREE.TorusGeometry(0.2, 0.025, 5, 12, Math.PI)), accentMat);
+  hoop.position.set(0, deckY + shellH + 0.24, -hl * 0.62);
+  hoop.rotation.y = Math.PI / 2;
+  bodyGroup.add(hoop);
+
+  // 9) 挡泥板
+  for (const side of [-1, 1]) {
+    for (const front of [true, false]) {
+      const guard = new THREE.Mesh(flat(new THREE.TorusGeometry(wheelR + 0.045, 0.022, 4, 9, Math.PI)), cardboardMat);
+      guard.position.set(
+        side * hw * 0.96,
+        -spec.suspensionRestLength + spec.targetStaticCompression + 0.02,
+        front ? hl * 0.95 : -hl * 0.95,
+      );
+      guard.rotation.y = Math.PI / 2;
+      bodyGroup.add(guard);
+    }
+  }
+
+  // 10) 尾翼 + 前唇
+  for (const side of [-1, 1]) {
+    const post = new THREE.Mesh(flat(new THREE.BoxGeometry(0.05, 0.2, 0.05)), cardboardMat);
+    post.position.set(side * hw * 0.6, deckY + shellH + 0.12, -hl * 0.98);
+    bodyGroup.add(post);
+  }
+  const wing = new THREE.Mesh(flat(new THREE.BoxGeometry(hw * 1.7, 0.03, 0.22)), accentMat);
+  wing.position.set(0, deckY + shellH + 0.24, -hl * 1.0);
+  wing.castShadow = true;
+  bodyGroup.add(wing);
+  addOutline(wing, 0.03, bodyGroup, outlineMat);
+  const splitter = new THREE.Mesh(flat(new THREE.BoxGeometry(hw * 1.95, 0.03, 0.2)), cardboardMat);
+  splitter.position.set(0, bodyBottom + 0.03, hl * 1.02);
+  bodyGroup.add(splitter);
+
+  // ---------- 车手（坐进座舱） ----------
   const driver = buildDriver(options.species, seed + 61);
-  driver.group.position.set(0, 0.02, -0.20);
+  driver.group.position.set(0, 0.01, -0.26);
+  driver.group.scale.setScalar(0.9);
   root.add(driver.group);
   const driverArmR = driver.armR;
-
-  // ---------- 尾翼 / 前唇 ----------
-  const wingPostGeo = new THREE.BoxGeometry(0.05, 0.22, 0.05);
-  for (const s of [-1, 1]) {
-    const post = new THREE.Mesh(flat(wingPostGeo), cardboardMat);
-    post.position.set(s * hw * 0.6, 0.12, -hl * 0.86);
-    root.add(post);
-  }
-  const wing = new THREE.Mesh(flat(new THREE.BoxGeometry(hw * 1.7, 0.035, 0.22)), accentMat);
-  wing.position.set(0, 0.24, -hl * 0.88);
-  root.add(wing);
-  const splitter = new THREE.Mesh(flat(new THREE.BoxGeometry(hw * 1.8, 0.03, 0.18)), cardboardMat);
-  splitter.position.set(0, -0.235, hl * 0.95);
-  root.add(splitter);
 
   // ---------- 车轮 ----------
   const wheels: WheelVisual[] = [];
@@ -408,6 +465,8 @@ export function buildCarVisual(
 
   void originY;
   disposables.push(() => {
+    roundelMat.dispose();
+    lampMat.dispose();
     wheelGeo.tire.dispose();
     wheelGeo.tread.dispose();
     wheelGeo.hub.dispose();
@@ -437,11 +496,12 @@ export function buildCarVisual(
         w.spin.rotation.x = roll;
       }
       void lastRoll;
-      // 车身姿态：轻微俯仰与侧倾，来自真实物理量的视觉反馈
+      // 车身姿态：轻微俯仰与侧倾（车轮不跟着倾），来自真实物理量的视觉反馈
       const pitch = THREE.MathUtils.clamp(-t.longitudinalAccel * 0.004, -0.06, 0.06);
       const roll = THREE.MathUtils.clamp(t.lateralAccel * 0.0035, -0.07, 0.07);
-      shell.rotation.x += (pitch - shell.rotation.x) * Math.min(1, dt * 8);
-      shell.rotation.z += (roll - shell.rotation.z) * Math.min(1, dt * 8);
+      bodyGroup.rotation.x += (pitch - bodyGroup.rotation.x) * Math.min(1, dt * 8);
+      bodyGroup.rotation.z += (roll - bodyGroup.rotation.z) * Math.min(1, dt * 8);
+      void shell;
       // 车手挥手
       wave += dt * 3.2;
       driverArmR.rotation.z = -1.15 + Math.sin(wave) * 0.25;
