@@ -99,8 +99,8 @@ export function buildTrackView(
       fiber: 0.45,
       blotch: 0.55,
       creases: 3,
-      // 只留一点点网格暗示"手工垫板"，太重会像瓷砖
-      grid: 0.28,
+      // 网格线在远景里会像瓷砖缝，去掉
+      grid: 0,
       edgeShade: 0.18,
       key: `terrain-${theme.paperGround}`,
     }),
@@ -402,20 +402,49 @@ function buildStartGantry(track: BuiltTrack, theme: TrackTheme, seed: number): T
   beam.castShadow = true;
   g.add(beam);
 
-  // 地面黑白格。
-  // 注意：必须先把**几何**绕 X 摆平，再只用 rotation.y 对准赛道方向。
-  // 直接写 rotation.set(-PI/2, 0, yaw) 会因为欧拉角 XYZ 的顺序（先 Z 后 X）
-  // 让格纹在路面上整体歪掉 —— 这正是之前"起点黑白格是歪的"的原因。
-  const lineGeo = new THREE.PlaneGeometry(track.config.width, 2.6);
-  lineGeo.rotateX(-Math.PI / 2);
-  // 贴图含 12×12 格：横向铺 1 次 → 12 格 / 12 m = 每格 1 m；
-  // 纵向铺 2.6/12 次 → 约 2.6 格 / 2.6 m，也是每格 1 m。
-  const lineMap = checkerTexture(12);
-  lineMap.repeat.set(1, 2.6 / track.config.width);
-  const lineMat = paperMaterial(0xffffff, { map: lineMap });
+  // 地面黑白格：做成**沿路面走的条带**，而不是一块平面矩形。
+  // 平面矩形在 12 m 宽时会把 1 m 宽、抬高 5.5 cm 的路肩切穿（穿模），
+  // 而且不会跟随路拱与超高。条带用与路面完全相同的断面与坐标，天然贴合。
+  const lineHalfWidth = Math.max(track.config.width / 2 - 1.0, 4);
+  const lineLen = 2.6;
+  const lineVerts: number[] = [];
+  const lineUvs: number[] = [];
+  const lineIdx: number[] = [];
+  const rows = 5;
+  const prof = [-1, -1 / 3, 0, 1 / 3, 1];
+  for (let r = 0; r < rows; r++) {
+    const tt = gate.t - lineLen / 2 / cl.totalLength + (r / (rows - 1)) * (lineLen / cl.totalLength);
+    const sm = cl.sampleAt(tt);
+    for (let k = 0; k < prof.length; k++) {
+      const lat = prof[k] * lineHalfWidth;
+      lineVerts.push(
+        sm.x + sm.rx * lat + sm.ux * 0.02,
+        sm.y + sm.ry * lat + sm.uy * 0.02,
+        sm.z + sm.rz * lat + sm.uz * 0.02,
+      );
+      lineUvs.push((prof[k] + 1) / 2, r / (rows - 1));
+    }
+  }
+  for (let r = 0; r < rows - 1; r++) {
+    for (let k = 0; k < prof.length - 1; k++) {
+      const a = r * prof.length + k;
+      const b = a + 1;
+      const c2 = (r + 1) * prof.length + k;
+      const d2 = c2 + 1;
+      lineIdx.push(a, b, c2, b, d2, c2);
+    }
+  }
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(lineVerts, 3));
+  lineGeo.setAttribute('uv', new THREE.Float32BufferAttribute(lineUvs, 2));
+  lineGeo.setIndex(lineIdx);
+  // 必须算顶点法线，否则受光为全黑（表现为一条黑带）
+  lineGeo.computeVertexNormals();
+  // 贴图是 8×8 格：横向铺 1 次 → 每格约 1 m；纵向铺 0.4 次 → 约 3 格 / 2.6 m
+  const lineMap = checkerTexture(8);
+  lineMap.repeat.set(1, 0.36);
+  const lineMat = paperMaterial(0xffffff, { map: lineMap, side: THREE.DoubleSide });
   const line = new THREE.Mesh(lineGeo, lineMat);
-  line.rotation.y = Math.atan2(sample.tx, sample.tz);
-  line.position.set(gate.x, gate.y + 0.025, gate.z);
   g.add(line);
 
   // 龙门架上的纸牌
@@ -573,7 +602,7 @@ function buildDecorations(
           }
           geo.computeVertexNormals();
           const hill = new THREE.Mesh(geo, assets.materials.hill[Math.floor(rng() * 3)]);
-          hill.position.set(x, y - h * 0.35, z);
+          hill.position.set(x, y, z);
           hill.rotation.y = rng() * 6.28;
           hill.castShadow = quality === 'high';
           group.add(hill);
@@ -642,7 +671,9 @@ function buildDecorations(
     if (cl.project(x, z).distance < smp.halfWidth + 4) continue;
     const y = placeOnGround(x, z);
     if (zone.kind === 'fence') {
-      const run = buildFenceRun(assets, rng, range(rng, 26, 46));
+      const run = buildFenceRun(assets, rng, range(rng, 26, 46), (px, pz) =>
+        track.terrain.heightAt(px, pz) - y,
+      );
       run.position.set(x, y, z);
       run.rotation.y = Math.atan2(smp.tx, smp.tz);
       group.add(run);
@@ -657,10 +688,18 @@ function buildDecorations(
       }
     } else if (zone.kind === 'barn') {
       const barn = buildBarn(assets, rng, range(rng, 0.95, 1.25));
-      barn.position.set(x, y, z);
+      // 建筑占地大，取四角与中心的最低点落地（宁可靠地也别悬空）
+      const groundY = Math.min(
+        y,
+        placeOnGround(x + 6, z + 6),
+        placeOnGround(x - 6, z + 6),
+        placeOnGround(x + 6, z - 6),
+        placeOnGround(x - 6, z - 6),
+      );
+      barn.position.set(x, groundY, z);
       group.add(barn);
     } else {
-      const pond = buildPond(rng, range(rng, 10, 16));
+      const pond = buildPond(rng, range(rng, 9, 14), (px, pz) => track.terrain.heightAt(x + px, z + pz) - y);
       pond.position.set(x, y, z);
       group.add(pond);
     }
@@ -682,7 +721,11 @@ function buildDecorations(
     if (chosen.some((t) => Math.abs(t - cand.t) < 0.03)) continue;
     chosen.push(cand.t);
   }
+  const startT = config.startT;
   for (const t of chosen) {
+    // 起终点附近已经有龙门架了，再插箭头牌会挤在一起
+    const dToStart = Math.min(Math.abs(t - startT), 1 - Math.abs(t - startT));
+    if (dToStart < 0.035) continue;
     const smp = cl.sampleAt(t);
     const turnLeft = smp.signedCurvature > 0;
     const board = buildChevronSign(theme, turnLeft ? -1 : 1, config.seed + Math.round(t * 997));

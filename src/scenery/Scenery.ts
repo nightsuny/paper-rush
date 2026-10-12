@@ -308,12 +308,13 @@ export function buildTree(
   scale = 1,
 ): THREE.Group {
   const g = new THREE.Group();
-  const trunkH = range(rng, 0.8, 1.4) * scale;
+  const trunkH = range(rng, 1.0, 1.6) * scale;
   const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.11 * scale, 0.16 * scale, trunkH, 6),
+    new THREE.CylinderGeometry(0.12 * scale, 0.18 * scale, trunkH * 1.18, 6),
     assets.materials.trunk,
   );
-  trunk.position.y = trunkH / 2;
+  // 树干整体上移一点，让顶端真正埋进树冠里（不要刚好停在树冠底面）
+  trunk.position.y = (trunkH * 1.18) / 2;
   trunk.castShadow = true;
   g.add(trunk);
 
@@ -321,7 +322,9 @@ export function buildTree(
   const crown = new THREE.Mesh(crownGeo, type === 'conifer' ? assets.materials.leaf : assets.materials.leafDark);
   const cs = range(rng, 0.85, 1.25) * scale * (type === 'conifer' ? 1.0 : 0.9);
   crown.scale.setScalar(cs);
-  crown.position.y = trunkH + (type === 'conifer' ? 0.35 * cs : 0.75 * cs);
+  // 关键：针叶树冠的几何是从自己局部 y=0 往上长的，
+  // 所以它必须放在树干**中段**（而不是树干顶再往上），否则会露出一截悬空的树干。
+  crown.position.y = type === 'conifer' ? trunkH * 0.62 : trunkH * 0.78;
   crown.rotation.y = rng() * Math.PI * 2;
   crown.castShadow = true;
   g.add(crown);
@@ -660,20 +663,31 @@ export function buildHaystack(assets: SceneryAssets, rng: () => number): THREE.G
 }
 
 /** 纸片水塘：一块浅蓝纸片 + 深色纸边 + 几片草叶。 */
-export function buildPond(rng: () => number, radius = 9): THREE.Group {
+export function buildPond(
+  rng: () => number,
+  radius = 9,
+  heightAt?: (x: number, z: number) => number,
+): THREE.Group {
   const g = new THREE.Group();
   const seg = 14;
-  const mkDisc = (r: number, y: number, color: number, key: string) => {
+  const mkDisc = (r: number, lift: number, color: number, key: string) => {
     const positions: number[] = [];
+    const h = (x: number, z: number) => (heightAt ? heightAt(x, z) : 0) + lift;
+    const hc = h(0, 0);
     for (let i = 0; i < seg; i++) {
       const a0 = (i / seg) * Math.PI * 2;
       const a1 = ((i + 1) / seg) * Math.PI * 2;
       const r0 = r * range(rng, 0.86, 1.14);
       const r1 = r * range(rng, 0.86, 1.14);
+      // 每个顶点各自贴合地形，水面才会顺着地面起伏而不是斜插进去
+      const x0 = Math.cos(a0) * r0;
+      const z0 = Math.sin(a0) * r0;
+      const x1 = Math.cos(a1) * r1;
+      const z1 = Math.sin(a1) * r1;
       positions.push(
-        Math.cos(a0) * r0, y, Math.sin(a0) * r0,
-        Math.cos(a1) * r1, y, Math.sin(a1) * r1,
-        0, y, 0,
+        x0, h(x0, z0), z0,
+        x1, h(x1, z1), z1,
+        0, hc, 0,
       );
     }
     const geo = new THREE.BufferGeometry();
@@ -690,8 +704,8 @@ export function buildPond(rng: () => number, radius = 9): THREE.Group {
     return mesh;
   };
   // 深色纸边（下）→ 浅蓝水面（上），形成"纸片贴在桌上"的层次
-  mkDisc(radius * 1.14, 0.015, 0x8fb0a4, 'bank');
-  mkDisc(radius, 0.03, 0x9fc7db, 'water');
+  mkDisc(radius * 1.16, 0.02, 0x8fb0a4, 'bank');
+  mkDisc(radius, 0.05, 0x9fc7db, 'water');
   return g;
 }
 
@@ -700,23 +714,37 @@ export function buildFenceRun(
   assets: SceneryAssets,
   rng: () => number,
   length: number,
+  heightAt?: (x: number, z: number) => number,
   panelSpacing = 1.5,
 ): THREE.Group {
   const g = new THREE.Group();
   const count = Math.max(2, Math.round(length / panelSpacing));
   const railMat = paperMaterial(0xb98a5c);
+  const baseY = (x: number, z: number) => (heightAt ? heightAt(x, z) : 0);
   for (let i = 0; i < count; i++) {
+    const px = (i - (count - 1) / 2) * panelSpacing;
+    const pz = range(rng, -0.03, 0.03);
     const panel = new THREE.Mesh(assets.geometries.fencePanel, assets.materials.houseWood);
-    panel.position.set((i - (count - 1) / 2) * panelSpacing, 0, range(rng, -0.03, 0.03));
+    // 每根栅栏板各自贴地，否则长栅栏在坡上会一头悬空一头埋掉
+    panel.position.set(px, baseY(px, pz), pz);
     panel.rotation.y = range(rng, -0.04, 0.04);
     panel.castShadow = true;
     g.add(panel);
   }
-  // 两道横杆
+  // 两道横杆（分段跟随地形，避免长条盒子斜穿地面）
+  const segs = Math.max(1, count - 1);
   for (const y of [0.28, 0.62]) {
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(count * panelSpacing, 0.06, 0.035), railMat);
-    rail.position.set(0, y, -0.045);
-    g.add(rail);
+    for (let i = 0; i < segs; i++) {
+      const x0 = (i - (count - 1) / 2) * panelSpacing;
+      const x1 = (i + 1 - (count - 1) / 2) * panelSpacing;
+      const my = (baseY(x0, -0.045) + baseY(x1, -0.045)) / 2 + y;
+      const rail = new THREE.Mesh(
+        new THREE.BoxGeometry(panelSpacing * 1.02, 0.06, 0.035),
+        railMat,
+      );
+      rail.position.set((x0 + x1) / 2, my, -0.045);
+      g.add(rail);
+    }
   }
   return g;
 }

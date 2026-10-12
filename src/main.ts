@@ -22,6 +22,12 @@ async function main(): Promise<void> {
     (window as unknown as { paperRush: Game }).paperRush = game;
     boot?.classList.add('hide');
     window.setTimeout(() => boot?.remove(), 500);
+
+    // 热更新时必须销毁旧实例：否则旧的渲染循环、WebGL 上下文与画布会残留下来
+    // （表现为画面里有多个 canvas、物理与计时表现得像"卡住"）。
+    import.meta.hot?.dispose(() => {
+      game.dispose();
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (boot) {

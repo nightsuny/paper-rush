@@ -352,13 +352,14 @@ export function skyTexture(theme: TrackTheme, seed: number): THREE.CanvasTexture
  * 卡通光照渐变图：把连续光照压成 3 档，
  * 得到"纸片被柔光照射"的插画感，而不是写实反光。
  */
-export function toonGradient(steps = 3): THREE.DataTexture {
+export function toonGradient(steps = 4): THREE.DataTexture {
   const key = `toon-${steps}`;
   const cached = textureCache.get(key);
   if (cached) return cached as THREE.DataTexture;
   const data = new Uint8Array(steps * 4);
   for (let i = 0; i < steps; i++) {
-    const v = Math.round(90 + (165 * i) / Math.max(steps - 1, 1));
+    // 最暗一档不能太低：90/255 会让背光面接近黑色，纸艺风格应该是"柔和的深色"而不是黑。
+    const v = Math.round(134 + (121 * i) / Math.max(steps - 1, 1));
     data[i * 4] = v;
     data[i * 4 + 1] = v;
     data[i * 4 + 2] = v;
@@ -381,7 +382,7 @@ export function paperMaterial(
   const mat = new THREE.MeshToonMaterial({
     color,
     map: options.map,
-    gradientMap: toonGradient(3),
+    gradientMap: toonGradient(4),
     side: options.side ?? THREE.FrontSide,
   });
   if (options.emissive) {
