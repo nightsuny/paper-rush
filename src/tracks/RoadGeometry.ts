@@ -38,6 +38,24 @@ export interface RoadProfile {
   apronSkirtDrop: number;
 }
 
+/**
+ * 某一行路堤的下压目标。
+ * 关键是 `to`：必须在**触到邻路沥青边缘之前**就降到 `dy`，
+ * 否则路堤中段会横在邻路沥青的上方（线性插值只在外沿降到邻路，中段仍高）。
+ */
+export interface ApronDrop {
+  /** 目标下沉量（米，相对本路路面，≤ 0） */
+  dy: number;
+  /** 到达该下沉量的横向距离（米） */
+  to: number;
+}
+
+/**
+ * 地面贴图的世界尺度（米/次重复）。
+ * 地形与路堤必须用**同一个**数值，否则接缝处纹理疏密不同，一眼就看得出是两块东西。
+ */
+export const GROUND_TILE_METERS = 22;
+
 export interface RibbonData {
   positions: Float32Array;
   uvs: Float32Array;
@@ -55,6 +73,19 @@ export interface RoadGeometrySpec {
   paperThickness: number;
   /** 是否闭合曲线 */
   closed: boolean;
+  /**
+   * 逐采样行的**路堤落点**（米，相对本路路面的下沉量，≤ 0）。
+   *
+   * 有另一条路在路堤伸展范围内时，把"路面之外"的整个断面按横向比例下压到
+   * `drop`：靠路面处仍贴着路面，到路堤外沿正好落到那条邻路的高度。
+   * 这样得到的是一个真实的边坡，而不是一块悬在邻路上的平纸板。
+   *
+   * 实测：不做这件事时，高 1.78 m 的路会把它的草地路堤悬在 17 m 外那条低路的
+   * 沥青上方 1.45 m（就是"路边的绿地像另一块模型拼上去"的来源），
+   * 车开过去还会被这级草地弹飞（实测 1440 km/h）。
+   * 邻路与本路同高时 drop = 0，此时等效于原来的"路口压平"。
+   */
+  apronDropRows?: readonly (ApronDrop | undefined)[];
 }
 
 export interface RoadGeometryResult {
@@ -78,6 +109,17 @@ export interface RoadGeometryResult {
   totalLength: number;
 }
 
+/** 路堤外沿到中心线的横向距离（= 走廊挖空半径）。 */
+export function apronInnerLatFor(hw: number, profile: RoadProfile): number {
+  return hw + profile.vergeSlopeWidth + profile.apronWidth + profile.apronSkirtWidth;
+}
+
+/** 某条路的走廊半径/路堤伸展范围（米）。 */
+export function apronReachOf(spec: RoadGeometrySpec): number {
+  const p = makeProfile({ width: spec.width, paperThickness: spec.paperThickness });
+  return apronInnerLatFor(spec.width / 2, p);
+}
+
 function makeProfile(config: { width: number; paperThickness: number }): RoadProfile {
   return {
     halfWidth: config.width / 2,
@@ -87,6 +129,11 @@ function makeProfile(config: { width: number; paperThickness: number }): RoadPro
     crown: 0.004,
     vergeSlopeWidth: 1.4,
     vergeDrop: 0.1,
+    // 路堤宽度 = 走廊挖空半径 - 路面半宽 - 过渡坡宽。
+    // 注意这是个**折中**：路堤越宽，走廊挖空越远、地形越不会贴到路面；
+    // 但路堤也会伸得更远，在"高路与低路相邻"处更容易盖到旁边那条路的头上。
+    // 实测把它从 9 加到 14 反而让"路堤压到邻路"从 27 处涨到 45 处，因此保持 9。
+    // 真正的解法是在重叠区抑制路堤断面（S2 未完成项，见开发进度.md）。
     apronWidth: 9,
     apronDrop: 0.1,
     apronSkirtWidth: 2.6,
@@ -107,6 +154,11 @@ function buildRibbon(
    * 会被超高抬起近 1 米，直接高过路面形成一道墙。
    */
   bankCap = Number.POSITIVE_INFINITY,
+  /**
+   * 路堤下压：`from` = 路面半宽（边坡起点），`to` = 路堤外沿，`drops` = 逐行落点。
+   * 断面点按横向比例从原下沉量插值到 `drops[i]`，形成一条真实边坡。
+   */
+  ramp?: { from: number; drops: readonly (ApronDrop | undefined)[] },
 ): RibbonData {
   const n = samples.length;
   const p = profile.length;
@@ -123,9 +175,20 @@ function buildRibbon(
       const idx = (i * p + j) * 3;
       // 横向位置用完整的 lateral；高度只用夹紧后的 lateral（超高不外溢）
       const latForY = Math.max(-bankCap, Math.min(bankCap, off.lateral));
-      positions[idx] = s.x + s.rx * off.lateral + s.ux * off.dy;
-      positions[idx + 1] = s.y + s.ry * latForY + s.uy * off.dy;
-      positions[idx + 2] = s.z + s.rz * off.lateral + s.uz * off.dy;
+      // 路面之外按横向比例下压：靠路面处贴住路面，到路堤外沿落到邻路高度
+      let dy = off.dy;
+      if (ramp) {
+        const drop = ramp.drops[i % n];
+        const lat = Math.abs(off.lateral);
+        if (drop !== undefined && lat > ramp.from) {
+          const span = Math.max(drop.to - ramp.from, 0.01);
+          const t = Math.min(1, (lat - ramp.from) / span);
+          dy = off.dy + (drop.dy - off.dy) * t;
+        }
+      }
+      positions[idx] = s.x + s.rx * off.lateral + s.ux * dy;
+      positions[idx + 1] = s.y + s.ry * latForY + s.uy * dy;
+      positions[idx + 2] = s.z + s.rz * off.lateral + s.uz * dy;
       const uv = (i * p + j) * 2;
       uvs[uv] = uAcross[j];
       uvs[uv + 1] = s.s / vRepeatMeters;
@@ -201,6 +264,9 @@ export function buildRoadGeometry(
 
   const closed = spec.closed;
 
+  const ramp = spec.apronDropRows
+    ? { from: hw, drops: spec.apronDropRows }
+    : undefined;
   const road = buildRibbon(
     samples,
     [full[2], full[3], full[4]],
@@ -208,17 +274,18 @@ export function buildRoadGeometry(
     vRepeat,
     closed,
     hw,
+    ramp,
   );
-  const kerbLeft = buildRibbon(samples, [full[1], full[2]], [0, 1], 3, closed, hw);
-  const kerbRight = buildRibbon(samples, [full[4], full[5]], [0, 1], 3, closed, hw);
+  const kerbLeft = buildRibbon(samples, [full[1], full[2]], [0, 1], 3, closed, hw, ramp);
+  const kerbRight = buildRibbon(samples, [full[4], full[5]], [0, 1], 3, closed, hw, ramp);
   // 路堤过渡坡（草地），把路肩外沿平顺接到路堤面
-  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 4, closed, hw);
-  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 4, closed, hw);
+  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 4, closed, hw, ramp);
+  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 4, closed, hw, ramp);
 
   // 碰撞面：整个断面（含路肩与过渡坡），连续无孔洞、无台坎。
   // 超高只作用到路面半宽，外侧地面保持水平 —— 这是可驾驶性的关键。
   const collision = toTrimesh(
-    buildRibbon(samples, full, [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1], vRepeat, closed, hw),
+    buildRibbon(samples, full, [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1], vRepeat, closed, hw, ramp),
   );
   // 路堤：过渡坡外沿 → 平铺纸带 → 收边，形成"纸板赛道压在一张桌子上"的边缘
   const apronOuter = profile.apronDrop;
@@ -227,6 +294,8 @@ export function buildRoadGeometry(
   // 断面点一律按 lateral 递增排列，保证绕序一致（法线朝上）
   const apronInnerLat = hw + vsw;
   // 路堤从"过渡坡外沿"开始，高度与断面 full[0] 完全一致（无缝、无台坎）
+  // 路堤的 UV 用世界米数（横向 / 地面尺度、纵向 弧长 / 地面尺度），
+  // 与地形贴图完全同尺度 —— 这样"路边草地"和"远处地面"是同一张皮。
   const apronLeft = buildRibbon(
     samples,
     [
@@ -235,10 +304,16 @@ export function buildRoadGeometry(
       { lateral: -(apronInnerLat + 0.8), dy: -apronOuter },
       { lateral: -apronInnerLat, dy: -vd },
     ],
-    [0, 0.2, 0.9, 1],
-    8,
+    [
+      -(apronInnerLat + apronFar) / GROUND_TILE_METERS,
+      -(apronInnerLat + profile.apronWidth) / GROUND_TILE_METERS,
+      -(apronInnerLat + 0.8) / GROUND_TILE_METERS,
+      -apronInnerLat / GROUND_TILE_METERS,
+    ],
+    GROUND_TILE_METERS,
     closed,
     hw,
+    ramp,
   );
   const apronRight = buildRibbon(
     samples,
@@ -248,10 +323,16 @@ export function buildRoadGeometry(
       { lateral: apronInnerLat + profile.apronWidth, dy: -apronOuter },
       { lateral: apronInnerLat + apronFar, dy: -apronEnd },
     ],
-    [0, 0.1, 0.8, 1],
-    8,
+    [
+      apronInnerLat / GROUND_TILE_METERS,
+      (apronInnerLat + 0.8) / GROUND_TILE_METERS,
+      (apronInnerLat + profile.apronWidth) / GROUND_TILE_METERS,
+      (apronInnerLat + apronFar) / GROUND_TILE_METERS,
+    ],
+    GROUND_TILE_METERS,
     closed,
     hw,
+    ramp,
   );
   const apronCollisionBand = [
     { lateral: -(apronInnerLat + apronFar), dy: -apronEnd },
@@ -263,8 +344,8 @@ export function buildRoadGeometry(
     { lateral: apronInnerLat + profile.apronWidth, dy: -apronOuter },
     { lateral: apronInnerLat + apronFar, dy: -apronEnd },
   ];
-  const a1 = toTrimesh(buildRibbon(samples, apronCollisionBand, [0, 0.8, 1], 8, closed, hw));
-  const a2 = toTrimesh(buildRibbon(samples, apronCollisionBandRight, [0, 0.2, 1], 8, closed, hw));
+  const a1 = toTrimesh(buildRibbon(samples, apronCollisionBand, [0, 0.8, 1], 8, closed, hw, ramp));
+  const a2 = toTrimesh(buildRibbon(samples, apronCollisionBandRight, [0, 0.2, 1], 8, closed, hw, ramp));
   const apronVerts = new Float32Array(a1.vertices.length + a2.vertices.length);
   apronVerts.set(a1.vertices, 0);
   apronVerts.set(a2.vertices, a1.vertices.length);

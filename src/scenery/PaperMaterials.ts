@@ -328,10 +328,17 @@ export function skyTexture(theme: TrackTheme, seed: number): THREE.CanvasTexture
   c.height = h;
   const ctx = c.getContext('2d');
   if (!ctx) throw new Error('无法创建 2D 画布上下文');
+  // 注意方向：SphereGeometry 的 v=1 在**天顶**、v=0 在南极、v=0.5 正好是地平线。
+  // 之前把 skyTop 放在 v=0，等于把天空倒过来贴 —— 天顶是暖白色 skyBottom，
+  // 于是画面正上方出现一大团奶油色"穹顶"。这里按"地平线暖、天顶蓝"重排。
   const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, cssColor(theme.skyTop));
-  g.addColorStop(0.55, cssColor(theme.skyTop, 30));
-  g.addColorStop(1, cssColor(theme.skyBottom));
+  // 暖色只留在地平线附近 ~10° 以内，再往上很快转蓝。
+  // 早先把暖色铺到 v=0.74（≈43° 仰角），整片低空都是奶油色，看上去就是天上扣了个圆盘。
+  g.addColorStop(0, cssColor(theme.skyBottom, 8));
+  g.addColorStop(0.5, cssColor(theme.skyBottom, 8));
+  g.addColorStop(0.58, cssColor(theme.skyTop, 34));
+  g.addColorStop(0.72, cssColor(theme.skyTop));
+  g.addColorStop(1, cssColor(theme.skyTop));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
   // 手绘颗粒，避免渐变过于平滑
@@ -377,13 +384,21 @@ export function toonGradient(steps = 4): THREE.DataTexture {
 /** 纸张材质：卡通分级 + 可选贴图。 */
 export function paperMaterial(
   color: number,
-  options: { map?: THREE.Texture; side?: THREE.Side; roughness?: number; emissive?: number } = {},
+  options: {
+    map?: THREE.Texture;
+    side?: THREE.Side;
+    roughness?: number;
+    emissive?: number;
+    /** 使用顶点色（与 color 相乘）。用于地面这种"一张连续材质、按距离过渡颜色"的情形。 */
+    vertexColors?: boolean;
+  } = {},
 ): THREE.MeshToonMaterial {
   const mat = new THREE.MeshToonMaterial({
     color,
     map: options.map,
     gradientMap: toonGradient(4),
     side: options.side ?? THREE.FrontSide,
+    vertexColors: options.vertexColors === true,
   });
   if (options.emissive) {
     mat.emissive = new THREE.Color(options.emissive);

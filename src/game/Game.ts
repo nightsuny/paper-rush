@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { initPhysics, PhysicsWorld, PHYSICS_DT } from '../physics/PhysicsWorld';
 import { RegionBuilder, type BuiltRegion } from '../world/Region';
-import { REGION_SKELETON } from '../world/catalog/region1';
+import { REGION_QINGYE } from "../world/catalog/region1";
 import { WorldSession } from '../world/WorldSession';
 import { buildRegionView, type RegionView } from '../world/RegionView';
 import type { NetworkProjection } from '../world/RoadNetwork';
@@ -119,8 +119,11 @@ export class Game {
       powerPreference: 'high-performance',
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // 高光滚降：纸艺是浅色调，没有色调映射时亮部会直接顶到纯白、显得很"平"。
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.25;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(REGION_SKELETON.theme.skyBottom);
+    this.renderer.setClearColor(REGION_QINGYE.theme.skyBottom);
     this.applyQuality();
 
     this.scene.add(this.carMeshRoot);
@@ -182,10 +185,10 @@ export class Game {
 
     const derived = deriveVehicle(STOCK_KART);
     const world = new PhysicsWorld(-derived.gravity);
-    const region = new RegionBuilder(REGION_SKELETON, world).built;
+    const region = new RegionBuilder(REGION_QINGYE, world).built;
     const regionView = buildRegionView(region, settings.quality);
 
-    const theme = REGION_SKELETON.theme;
+    const theme = REGION_QINGYE.theme;
     const hemi = new THREE.HemisphereLight(theme.ambient, theme.grass, theme.ambientIntensity);
     const sun = new THREE.DirectionalLight(theme.sun, theme.sunIntensity);
     sun.castShadow = QUALITY_PRESETS[settings.quality].shadows;

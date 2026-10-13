@@ -34,10 +34,18 @@ export const ROAD_KINDS: Record<RoadKind, RoadKindSpec> = {
   dirt: { kind: 'dirt', width: 6.5, surface: 'dirt', referenceSpeed: 16, defaultGuardrail: false },
 };
 
+/** 装饰分区的类型，决定这一段路两侧长什么。 */
+export type RoadBiome = 'meadow' | 'forest' | 'village' | 'farm' | 'urban';
+
 /** 一条路段。`closed` 为 true 时是环线（环岛、环线赛道）。 */
 export interface RoadSegmentConfig {
   id: string;
   kind: RoadKind;
+  /**
+   * 该路段两侧的景观类型。RegionView 据此选择装饰种类与密度 ——
+   * 这样"地图主题影响观感"是按路段配置的，而不是全图一个调子。
+   */
+  biome?: RoadBiome;
   /** 控制点。闭合路段首尾自动相连；开放路段两端就是路的尽头（会接路口或区域边界）。 */
   points: ControlPoint[];
   closed?: boolean;

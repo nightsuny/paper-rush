@@ -47,7 +47,7 @@ export class ChaseCamera {
     this.baseFov = opts.fov ?? 62;
     this.posSmooth = opts.positionSmooth ?? 0.13;
     this.rotSmooth = opts.rotationSmooth ?? 0.10;
-    this.camera = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.35, 2200);
+    this.camera = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.35, 4200);
   }
 
   /** 切换镜头模式（C 键）。 */

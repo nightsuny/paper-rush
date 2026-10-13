@@ -117,6 +117,50 @@ export class RoadNetwork {
     return this.curves.findIndex((c) => c.config.id === id);
   }
 
+  /**
+   * 给定半径内出现的**最低**路面采样点（找不到返回 null）。
+   *
+   * 地形的"走廊压平"必须取最低的那条路。如果取最近的那条，两条不同高度的路靠在一起时，
+   * 地形会被压到较高那条的平面，把较低那条整条埋掉 —— 实测最严重处草地高出路面 5.81 m，
+   * 车开过去会被弹飞（实测 1440 km/h）。取最低值则两条路都不会被埋。
+   */
+  lowestRoadSampleWithin(
+    x: number,
+    z: number,
+    radius: number,
+    excludeSegment?: number,
+  ): { segmentIndex: number; sampleIndex: number; distance: number; y: number } | null {
+    const span = Math.ceil(radius / this.cell) + 1;
+    const gx = Math.floor((x - this.minX) / this.cell);
+    const gz = Math.floor((z - this.minZ) / this.cell);
+    let best: { segmentIndex: number; sampleIndex: number; distance: number; y: number } | null =
+      null;
+    const r2 = radius * radius;
+    for (let dx = -span; dx <= span; dx++) {
+      const ix = gx + dx;
+      if (ix < 0 || ix >= this.gridW) continue;
+      for (let dz = -span; dz <= span; dz++) {
+        const iz = gz + dz;
+        if (iz < 0 || iz >= this.gridH) continue;
+        const list = this.grid[ix + iz * this.gridW];
+        for (let k = 0; k < list.length; k += 2) {
+          const si = list[k];
+          if (si === excludeSegment) continue;
+          const i = list[k + 1];
+          const s = this.curves[si].samples[i];
+          const ddx = s.x - x;
+          const ddz = s.z - z;
+          const d2 = ddx * ddx + ddz * ddz;
+          if (d2 > r2) continue;
+          if (best === null || s.y < best.y) {
+            best = { segmentIndex: si, sampleIndex: i, distance: Math.sqrt(d2), y: s.y };
+          }
+        }
+      }
+    }
+    return best;
+  }
+
   /** 世界坐标 → 全网最近路段投影。 */
   project(x: number, z: number, yHint?: number): NetworkProjection {
     const gx = Math.floor((x - this.minX) / this.cell);

@@ -8,6 +8,7 @@ import {
   type RoadGeometryResult,
 } from '../tracks/RoadGeometry';
 import { buildTerrainFromProjector, type TerrainData, type TerrainProjector } from '../tracks/Terrain';
+import { apronReachOf } from '../tracks/RoadGeometry';
 import type { GuardrailConfig } from '../tracks/types';
 import { RoadNetwork, type RoadSegmentCurve } from './RoadNetwork';
 import {
@@ -98,8 +99,35 @@ export class RegionBuilder {
       const width = cfg.width ?? kind.width;
       const surface = surfaceById(cfg.surface ?? kind.surface);
 
+      // 逐行算"路堤落点"：如果别的路在本路路堤伸展范围内，就把路面之外的断面
+      // 按横向比例下压到那条邻路的高度（真实边坡），否则路堤会悬在邻路沥青上方。
+      // 邻路与本路同高时 drop = 0 → 等价于路口压平，顺带消掉接缝台阶。
+      const ownReach = apronReachOf({
+        width,
+        paperThickness: config.paperThickness,
+        closed: curve.closed,
+      });
+      const apronDropRows = curve.samples.map((s) => {
+        const low = network.lowestRoadSampleWithin(s.x, s.z, ownReach, i);
+        if (!low) return undefined;
+        const dy = low.y - s.y;
+        // 邻路不比本路低：压平到本路高度即可（路口情形，不留沟）
+        if (dy > -0.05) return { dy: 0, to: ownReach };
+        // 邻路更低：必须在**触到邻路沥青边缘之前**就降到它下面 0.35 m。
+        // 只在外沿降是不够的：线性插值的中段仍会横在邻路沥青上方
+        // （实测残余草地高出路面 0.93 m 就是这么来的）。
+        const otherHalf = network.curves[low.segmentIndex].config.width / 2;
+        const to = Math.max(low.distance - otherHalf, width / 2 + 0.6);
+        return { dy: dy - 0.35, to: Math.min(to, ownReach) };
+      });
+
       const road = buildRoadGeometry(
-        { width, paperThickness: config.paperThickness, closed: curve.closed },
+        {
+          width,
+          paperThickness: config.paperThickness,
+          closed: curve.closed,
+          apronDropRows,
+        },
         curve,
       );
 
@@ -206,8 +234,13 @@ export class RegionBuilder {
       },
       {
         corridorCutRadius: maxCut,
-        resolution: opts.terrainResolution ?? 240,
+        resolution: opts.terrainResolution ?? 340,
         margin: opts.terrainMargin ?? 170,
+        // 地面顶点色：紧贴路面用 theme.grass（与路堤材质同色），
+        // 向外 16→64 m 过渡到 theme.paperGround（野地）。地面因此是一张连续的东西。
+        groundNearColor: config.theme.grass,
+        groundFarColor: config.theme.paperGround,
+        groundColorFade: [16, 64],
       },
     );
     const terrainBody = world.createStaticBody(0, 0, 0);
@@ -322,17 +355,48 @@ export class RegionBuilder {
 
 /** 把路网包装成地形用的"最近道路"查询。 */
 export function networkProjector(net: RoadNetwork): TerrainProjector {
+  // 预计算：每个采样点周围 R 米内的最低路面高度（含自身）。
+  // 一次性算好，之后每个地形格点只是 O(1) 查表 —— 逐格调用空间索引会慢一个量级。
+  const NEIGHBOUR_R = 22;
+  const floorCache = net.curves.map((c) => {
+    const out = new Float32Array(c.samples.length);
+    for (let i = 0; i < c.samples.length; i++) {
+      const s = c.samples[i];
+      const low = net.lowestRoadSampleWithin(s.x, s.z, NEIGHBOUR_R);
+      out[i] = low ? Math.min(low.y, s.y) : s.y;
+    }
+    return out;
+  });
+
   return {
     bounds: net.bounds,
     sample(x, z) {
       const p = net.project(x, z);
       const s = net.curves[p.segmentIndex].samples[p.sampleIndex];
+      const curve = net.curves[p.segmentIndex];
+      const closed = curve.closed;
+      const last = curve.samples.length - 1;
+      let cutDistance = p.distance;
+      // 开放路段的端头之外不挖空，否则路的尽头会出现天坑
+      if (!closed && (p.sampleIndex === 0 || p.sampleIndex === last)) {
+        const along = (x - s.x) * s.tx + (z - s.z) * s.tz;
+        if ((p.sampleIndex === 0 && along < 0) || (p.sampleIndex === last && along > 0)) {
+          cutDistance = Number.POSITIVE_INFINITY;
+        }
+      }
+      // 走廊压平取"附近最低的那条路"：否则较高那条的平面会把较低那条埋掉。
+      // 压到较低那条时不再施加它的横向超高（此时这里是两路之间的平地，平的就对）。
+      const floorY = floorCache[p.segmentIndex][p.sampleIndex];
+      const buried = floorY < s.y - 0.05;
       return {
         distance: p.distance,
         lateral: p.lateral,
-        bankLateral: Math.max(-s.halfWidth, Math.min(s.halfWidth, p.lateral)),
-        roadY: s.y,
+        bankLateral: buried
+          ? 0
+          : Math.max(-s.halfWidth, Math.min(s.halfWidth, p.lateral)),
+        roadY: buried ? floorY : s.y,
         roadRy: s.ry,
+        cutDistance,
       };
     },
   };

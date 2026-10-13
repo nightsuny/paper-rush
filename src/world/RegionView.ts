@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ribbonToGeometry } from '../tracks/RoadGeometry';
+import { GROUND_TILE_METERS, ribbonToGeometry } from '../tracks/RoadGeometry';
 import { terrainToGeometry } from '../tracks/Terrain';
 import {
   cardboardTexture,
@@ -41,23 +41,25 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
 
   // ---------------- 地形 ----------------
   const terrainGeo = terrainToGeometry(region.terrain);
+  // 地面只有这一张皮：地形与路堤共用同一个贴图、同一个世界尺度（22 m/次）。
+  // 顶点色负责"近路修剪过的草 → 远处野地"的过渡，颜色也由它给出。
+  // 之前地形是 paperGround、路堤是 grass（两个颜色、两张贴图、34m 与 8m 两种疏密），
+  // 于是路堤外沿会露出"两块不同模型拼起来"的断层。
   const terrainTex = paperTexture({
-    color: theme.paperGround,
+    color: 0xffffff,
     seed: config.seed + 5,
     size: 512,
-    fiber: 0.45,
-    blotch: 0.55,
-    creases: 3,
-    grid: 0,
-    edgeShade: 0.18,
-    key: `region-terrain-${theme.paperGround}`,
+    fiber: 0.5,
+    blotch: 0.5,
+    creases: 2,
+    key: 'region-ground',
   });
   const spanX = region.terrain.bounds.maxX - region.terrain.bounds.minX;
   const spanZ = region.terrain.bounds.maxZ - region.terrain.bounds.minZ;
   terrainTex.wrapS = THREE.RepeatWrapping;
   terrainTex.wrapT = THREE.RepeatWrapping;
-  terrainTex.repeat.set(spanX / 34, spanZ / 34);
-  const terrainMat = paperMaterial(theme.paperGround, { map: terrainTex });
+  terrainTex.repeat.set(spanX / GROUND_TILE_METERS, spanZ / GROUND_TILE_METERS);
+  const terrainMat = paperMaterial(0xffffff, { map: terrainTex, vertexColors: true });
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.receiveShadow = true;
   group.add(terrainMesh);
@@ -73,16 +75,10 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
     map: kerbTextureFor(theme, config.seed),
     side: THREE.DoubleSide,
   });
-  const vergeMat = paperMaterial(0xffffff, {
-    map: paperTexture({
-      color: theme.grass,
-      seed: config.seed + 41,
-      size: 256,
-      fiber: 0.7,
-      blotch: 0.5,
-      creases: 1,
-      key: `region-verge-${theme.grass}`,
-    }),
+  // 路堤草地：与地形**同一张贴图、同一个世界尺度**，颜色就是顶点色的近端色，
+  // 因此与地形在接缝处完全连续。
+  const vergeMat = paperMaterial(theme.grass, {
+    map: terrainTex,
     side: THREE.DoubleSide,
   });
   const wallMat = paperMaterial(0xc2a273, {
@@ -287,7 +283,8 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
   }
 
   // ---------------- 天空 ----------------
-  const skyGeo = new THREE.SphereGeometry(2600, 24, 16);
+  // 半径 1600：远小于相机远平面（4200），又大于地形半幅（约 1400），不会与地形相交。
+  const skyGeo = new THREE.SphereGeometry(1600, 32, 20);
   const skyMat = new THREE.MeshBasicMaterial({
     map: skyTexture(theme, config.seed),
     side: THREE.BackSide,
@@ -295,6 +292,8 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
     depthWrite: false,
   });
   const sky = new THREE.Mesh(skyGeo, skyMat);
+  // 天空球跟着相机走：这样它永远完整落在远平面内，也不会被地形/边界穿到。
+  sky.renderOrder = -1000;
   group.add(sky);
   disposables.push(() => {
     skyGeo.dispose();
@@ -367,17 +366,55 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
 // 纹理：区域版路面/路肩（复用 PaperMaterials 的生成器）
 // ---------------------------------------------------------------------------
 
+/**
+ * 路面贴图 = 沥青纸底 + 车道线。
+ *
+ * UV 约定（见 RoadGeometry.buildRibbon）：
+ *  - u ∈ [0,1] **正好横跨沥青宽度**，所以线的横向位置用比例写，换路面宽度也对
+ *  - v 每 12 m 重复一次（`vRepeat = 12`），所以中央虚线按 3 m 线 + 9 m 空 = 一个周期画
+ *
+ * 之前路面就是"一个纯色 + 纸纤维噪声"，没有任何标线，所以读起来不像路、像灰色塑料条。
+ */
 function roadTextureFor(theme: RegionConfig['theme'], seed: number): THREE.Texture {
-  return paperTexture({
+  const size = 512;
+  const base = paperTexture({
     color: theme.road,
     seed,
-    size: 512,
+    size,
     fiber: 0.5,
     blotch: 0.5,
     creases: 2,
     key: `region-road-${theme.road}`,
   });
+  const cached = roadMarkingCache.get(theme.road);
+  if (cached) return cached;
+
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  if (!ctx) return base;
+  ctx.drawImage(base.image as HTMLCanvasElement, 0, 0, size, size);
+
+  const ink = `#${theme.accent.toString(16).padStart(6, '0')}`;
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = ink;
+  const lineW = size * 0.028;
+  // 两侧边线（实线）
+  ctx.fillRect(size * 0.075 - lineW / 2, 0, lineW, size);
+  ctx.fillRect(size * 0.925 - lineW / 2, 0, lineW, size);
+  // 中央虚线：3 m 线 + 9 m 空（一个 12 m 周期 = 一张贴图的高度）
+  ctx.fillRect(size * 0.5 - lineW / 2, 0, lineW, size * 0.25);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  roadMarkingCache.set(theme.road, tex);
+  return tex;
 }
+
+const roadMarkingCache = new Map<number, THREE.Texture>();
 
 function dirtTextureFor(seed: number): THREE.Texture {
   return paperTexture({

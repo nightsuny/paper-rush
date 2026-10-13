@@ -21,6 +21,12 @@ export interface TerrainData {
   corridorCutRadius: number;
   /** 归一化 UV（0..1 覆盖整张地图） */
   uvs: Float32Array;
+  /**
+   * 逐顶点颜色（rgb 交错）。用"到最近道路的距离"在 nearColor / farColor 之间过渡：
+   * 紧贴路面是被修剪过的草，向外逐渐变成野地。
+   * 这样地面是**一张连续的东西**，不会在路堤外沿出现"两块模型拼起来"的颜色断层。
+   */
+  colors?: Float32Array;
   /** 网格分辨率（每边的格子数） */
   resolution: number;
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
@@ -29,6 +35,12 @@ export interface TerrainData {
 }
 
 export interface TerrainOptions {
+  /** 地面过渡的近端颜色（紧贴路面） */
+  groundNearColor?: number;
+  /** 地面过渡的远端颜色（远离路面） */
+  groundFarColor?: number;
+  /** 过渡的距离区间（米），默认 [16, 64] */
+  groundColorFade?: [number, number];
   /** 每边格子数（越大越精细） */
   resolution?: number;
   /** 地图相对赛道的额外外扩（米） */
@@ -59,6 +71,12 @@ export interface TerrainRoadSample {
   roadY: number;
   /** 该处路面右向量的 y 分量（用于横向超高） */
   roadRy: number;
+  /**
+   * 用于"走廊挖空"判定的距离。正常等于 distance；
+   * 但当查询点位于**开放路段端头之外**时返回 Infinity —— 端头外没有路面/路堤覆盖，
+   * 如果照样挖空，就会在路的尽头挖出一个天坑，车开出去直接掉下去。
+   */
+  cutDistance: number;
 }
 
 /**
@@ -95,9 +113,33 @@ export function centerlineProjector(centerline: Centerline): TerrainProjector {
         bankLateral: Math.max(-s.halfWidth, Math.min(s.halfWidth, p.lateral)),
         roadY: s.y,
         roadRy: s.ry,
+        cutDistance: cutDistanceAt(centerline.samples, p.index, x, z, p.distance, centerline.closed),
       };
     },
   };
+}
+
+/**
+ * 判断查询点是否落在开放路段的端头之外。
+ * 若是，则该点**不该**被走廊挖空（那里没有路面覆盖），返回 Infinity。
+ */
+function cutDistanceAt(
+  samples: ReadonlyArray<{ x: number; z: number; tx: number; tz: number }>,
+  index: number,
+  x: number,
+  z: number,
+  distance: number,
+  closed: boolean,
+): number {
+  if (closed) return distance;
+  const last = samples.length - 1;
+  // 只有最近点落在端点上时才可能"越出跨度"
+  if (index !== 0 && index !== last) return distance;
+  const s = samples[index];
+  const along = (x - s.x) * s.tx + (z - s.z) * s.tz;
+  if (index === 0 && along < 0) return Number.POSITIVE_INFINITY;
+  if (index === last && along > 0) return Number.POSITIVE_INFINITY;
+  return distance;
 }
 
 /**
@@ -160,12 +202,20 @@ export function buildTerrainFromProjector(
   // 因此走廊内直接用中心线的局部路面高度（含横向超高），只减去一点"纸板抬升量"。
   const heights = new Float32Array(cols * cols);
   const distances = new Float32Array(cols * cols);
+  const wantColors = opts.groundNearColor !== undefined && opts.groundFarColor !== undefined;
+  const colors = wantColors ? new Float32Array(cols * cols * 3) : undefined;
+  const nearC = new THREE.Color(opts.groundNearColor ?? 0xffffff);
+  const farC = new THREE.Color(opts.groundFarColor ?? 0xffffff);
+  const [fadeA, fadeB] = opts.groundColorFade ?? [16, 64];
   const flatInner = config.width / 2 + 3;
   const flatOuter = flatInner + 26;
-  const hillsStart = flatInner + 12;
-  const hillsEnd = hillsStart + 55;
-  // 走廊下沉量必须大于"路堤外缘下沉量"，让路堤始终盖在地形之上
-  const lip = Math.max(config.paperThickness + 0.30, 0.34);
+  // 只有离路够远才起丘陵，避免路边出现陡坡
+  const hillsStart = flatInner + 26;
+  const hillsEnd = hillsStart + 95;
+  // 走廊下沉量：只要略低于路面（等于纸板厚度）即可。
+  // 早先为了"保证地形不会从路面穿出"把 lip 抬到 0.34m，但那会在路段端头留下台阶；
+  // 现在挖空已经承担了"地形不得进入走廊"的保证，lip 可以回到纸板厚度。
+  const lip = Math.max(config.paperThickness + 0.02, 0.04);
 
   for (let j = 0; j < cols; j++) {
     for (let i = 0; i < cols; i++) {
@@ -173,13 +223,26 @@ export function buildTerrainFromProjector(
       const z = minZ + (j / cells) * spanZ;
       const p = projector.sample(x, z);
       const d = p.distance;
-      distances[i + j * cols] = d;
+      distances[i + j * cols] = p.cutDistance;
       // 紧贴路面的走廊高度：横向超高只算到路面半宽，再往外是水平地面
       const nearH = p.roadY + p.bankLateral * p.roadRy - lip;
       const corridor = 1 - smoothstep(flatInner, flatOuter, d);
       // 丘陵：只有离赛道足够远才起伏，避免赛道旁边出现陡坡
       const hillMask = smoothstep(hillsStart, hillsEnd, d);
+      // 三个尺度叠加：大尺度地貌（山脊/谷地，波长数百米）+ 中尺度丘陵 + 小起伏。
+      // 之前只有后两项、且 terrainAmplitude 仅 2.2 m，所以放眼望去就是一张绿桌子 ——
+      // 这是"地图不像地图"的主要来源。公路修在整平过的路基上，远处才起地形，符合现实。
+      const landform =
+        fbm(
+          x * config.terrainScale * 0.32 + 41,
+          z * config.terrainScale * 0.32 - 17,
+          config.seed + 4409,
+          3,
+        ) *
+        config.terrainAmplitude *
+        2.4;
       const hills =
+        landform +
         fbm(x * config.terrainScale, z * config.terrainScale, config.seed, 4) *
           config.terrainAmplitude *
           1.6 +
@@ -188,6 +251,13 @@ export function buildTerrainFromProjector(
           0.35;
       const farH = base[i + j * cols] + hills * hillMask;
       heights[i + j * cols] = nearH * corridor + farH * (1 - corridor);
+      if (colors) {
+        const k = smoothstep(fadeA, fadeB, d);
+        const o = (i + j * cols) * 3;
+        colors[o] = nearC.r + (farC.r - nearC.r) * k;
+        colors[o + 1] = nearC.g + (farC.g - nearC.g) * k;
+        colors[o + 2] = nearC.b + (farC.b - nearC.b) * k;
+      }
     }
   }
 
@@ -263,6 +333,7 @@ export function buildTerrainFromProjector(
     indices,
     uvs,
     distances,
+    ...(colors ? { colors } : {}),
     corridorCutRadius: cutRadius,
     resolution: cells,
     bounds: { minX, minZ, maxX, maxZ },
@@ -292,6 +363,7 @@ export function terrainToGeometry(data: TerrainData): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(data.vertices, 3));
   g.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
+  if (data.colors) g.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
   g.setIndex(new THREE.BufferAttribute(data.indices, 1));
   g.computeVertexNormals();
   return g;
