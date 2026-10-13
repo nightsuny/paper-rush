@@ -8,7 +8,7 @@ import {
   type RoadGeometryResult,
 } from '../tracks/RoadGeometry';
 import { buildTerrainFromProjector, type TerrainData, type TerrainProjector } from '../tracks/Terrain';
-import { apronReachOf } from '../tracks/RoadGeometry';
+import { apronReachOf, roadRoughness } from '../tracks/RoadGeometry';
 import type { GuardrailConfig } from '../tracks/types';
 import { RoadNetwork, type RoadSegmentCurve } from './RoadNetwork';
 import {
@@ -127,6 +127,10 @@ export class RegionBuilder {
           paperThickness: config.paperThickness,
           closed: curve.closed,
           apronDropRows,
+          // 路面观感与体感按**等级**决定：土路无路缘、明显坑洼；沥青有路缘、接近平整
+          kerbHeight: kind.kerbHeight,
+          roughness: kind.roughness,
+          roughnessSeed: i + 1,
         },
         curve,
       );
@@ -386,6 +390,13 @@ export function networkProjector(net: RoadNetwork): TerrainProjector {
       }
       // 走廊压平取"附近最低的那条路"：否则较高那条的平面会把较低那条埋掉。
       // 压到较低那条时不再施加它的横向超高（此时这里是两路之间的平地，平的就对）。
+      // 地形走廊必须与路面加同一个起伏量，否则土路下颠处地形会从路面穿出
+      const si = p.segmentIndex;
+      const segRough = net.roughnessOf(si);
+      const roadBump =
+        segRough > 0
+          ? roadRoughness(s.s, p.lateral, net.roughnessSeedOf(si)) * segRough
+          : 0;
       const floorY = floorCache[p.segmentIndex][p.sampleIndex];
       const buried = floorY < s.y - 0.05;
       return {
@@ -397,6 +408,7 @@ export function networkProjector(net: RoadNetwork): TerrainProjector {
         roadY: buried ? floorY : s.y,
         roadRy: s.ry,
         cutDistance,
+        roadBump,
       };
     },
   };

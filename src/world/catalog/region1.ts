@@ -164,11 +164,26 @@ const ROADS_BUILT: RoadSegmentConfig[] = [
   }),
 
   // --- 村庄 ---
-  link('vil-conn', 'secondary', S2, [VIL[0], VIL[1] - VIL_RADIUS], {
+  // 村里的路一律是**土路**（kind:'dirt'）：无路缘、无车道线、明显坑洼、窄。
+  // 之前这里用的是 'secondary'（8 m 沥青 + 城市车道线 + 红路缘），
+  // 所以"村庄"看起来像城市路口 —— 这是最直接的错误。
+  link('vil-conn', 'dirt', S2, [VIL[0], VIL[1] - VIL_RADIUS], {
     nodes: 3, lift: 0.4, yStart: 3.0, yEnd: 2.6, biome: 'village',
   }),
-  ring('village-ring', 'secondary', VIL[0], VIL[1], VIL_RADIUS, {
-    y: 2.6, width: 7.5, biome: 'village',
+  // 村中主街：从南口一路向北穿过整个村子，在环线的**南顶点与北顶点**各形成一个十字口
+  // （正好落在环线顶点上，高程也一致，不需要另外对高度）
+  link('vil-main', 'dirt', [VIL[0], VIL[1] - VIL_RADIUS], [VIL[0], VIL[1] + VIL_RADIUS + 30], {
+    nodes: 4, lift: 0.15, yStart: 2.6, yEnd: 2.5, biome: 'village',
+  }),
+  ring('village-ring', 'dirt', VIL[0], VIL[1], VIL_RADIUS, {
+    y: 2.6, biome: 'village',
+  }),
+  // 两条东西向小巷：把房子串到主街与环线上，形成"街—巷—院"的层次
+  link('vil-lane-west', 'dirt', [VIL[0] - VIL_RADIUS, VIL[1]], [VIL[0] - VIL_RADIUS - 62, VIL[1] + 14], {
+    nodes: 3, lift: 0.2, yStart: 2.6, yEnd: 2.35, biome: 'village',
+  }),
+  link('vil-lane-east', 'dirt', [VIL[0] + VIL_RADIUS, VIL[1]], [VIL[0] + VIL_RADIUS + 58, VIL[1] - 12], {
+    nodes: 3, lift: 0.2, yStart: 2.6, yEnd: 2.4, biome: 'village',
   }),
 
   // --- 林区 ---
@@ -220,8 +235,19 @@ const ROADS_BUILT: RoadSegmentConfig[] = [
   },
 ];
 
-/** 断头路的端头（林间空地）。 */
-const DEAD_END_IDS = new Set(['forest-spur']);
+/**
+ * 断头路的端头。都不是"没接上的路"，而是**有意终止**：
+ *  - forest-spur：林间空地
+ *  - vil-lane-west / vil-lane-east：村中小巷，止于最后一户农家院
+ *  - vil-main：主街南端止于打谷场（场院）
+ * 校验器会把未声明的端头报成错误，所以意图必须写在这里。
+ */
+const DEAD_END_IDS = new Set([
+  'forest-spur',
+  'vil-main',
+  'vil-lane-west',
+  'vil-lane-east',
+]);
 const ROADS: RoadSegmentConfig[] = ROADS_BUILT.map((r) =>
   DEAD_END_IDS.has(r.id) ? { ...r, ends: { start: 'junction', end: 'dead' as const } } : r,
 );
@@ -290,7 +316,9 @@ export const REGION_QINGYE: RegionConfig = {
   collectibles: [],
   timeTrials: [],
   landmarks: LANDMARKS,
-  spawn: { segment: 'hub-e', t: 0.08, lateral: 3 },
+  // 出生点放在**村里**而不是空旷的环岛：先让玩家看到的是一处有设计的地方。
+  // 等到区域重做成"以村庄为核心的 1 km² 街区"时，这里就是村庄主街。
+  spawn: { segment: 'vil-main', t: 0.42, lateral: 0 },
   seed: 20260315,
   // 2.2 m 的起伏等于平地。7 m（叠加后实际 ±30 m 量级）才有地形可言。
   terrainAmplitude: 7,

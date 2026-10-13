@@ -26,12 +26,50 @@ export interface RoadKindSpec {
    * 只有配置里显式写了 guardrails 的路段才铺护栏（例如临水/临崖路段）。
    */
   readonly defaultGuardrail: boolean;
+  /**
+   * 路缘（马路牙子）相对路面的抬升（米）。0 = 没有路缘。
+   * 土路不应该有路缘 —— 真实村里的土路就是直接接到土肩上。
+   */
+  readonly kerbHeight?: number;
+  /**
+   * 路面不平整度（米，峰谷幅度）。土路取大一些才有"坑洼"的体感；
+   * 沥青路取很小，只当作细微起伏。
+   * 值会同时作用到**视觉网格与碰撞网格**（同一份断面），所以车是真的会颠。
+   */
+  readonly roughness?: number;
 }
 
 export const ROAD_KINDS: Record<RoadKind, RoadKindSpec> = {
-  primary: { kind: 'primary', width: 10, surface: 'asphalt', referenceSpeed: 30, defaultGuardrail: false },
-  secondary: { kind: 'secondary', width: 8, surface: 'asphalt', referenceSpeed: 24, defaultGuardrail: false },
-  dirt: { kind: 'dirt', width: 6.5, surface: 'dirt', referenceSpeed: 16, defaultGuardrail: false },
+  // 主干道：双车道沥青，有路缘、有标线，接近平直
+  primary: {
+    kind: 'primary',
+    width: 9,
+    surface: 'asphalt',
+    referenceSpeed: 30,
+    defaultGuardrail: false,
+    kerbHeight: 0.055,
+    roughness: 0.012,
+  },
+  // 乡道：单车道沥青，有路缘与标线，但更窄、起伏稍大
+  secondary: {
+    kind: 'secondary',
+    width: 6.4,
+    surface: 'asphalt',
+    referenceSpeed: 22,
+    defaultGuardrail: false,
+    kerbHeight: 0.05,
+    roughness: 0.022,
+  },
+  // 土路：村道与林道。窄、无路缘、无标线、明显坑洼
+  dirt: {
+    kind: 'dirt',
+    width: 4.6,
+    surface: 'dirt',
+    referenceSpeed: 13,
+    defaultGuardrail: false,
+    kerbHeight: 0,
+    roughness: 0.085,
+  },
 };
 
 /** 装饰分区的类型，决定这一段路两侧长什么。 */

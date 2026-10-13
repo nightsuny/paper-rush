@@ -9,10 +9,21 @@ import {
   skyTexture,
   toonGradient,
 } from '../scenery/PaperMaterials';
-import { buildCloud, buildCardboardHills, buildSceneryAssets, buildTree } from '../scenery/Scenery';
+import {
+  buildBarn,
+  buildCardboardHills,
+  buildCloud,
+  buildFenceAlong,
+  buildFlower,
+  buildHaystack,
+  buildHouse,
+  buildSceneryAssets,
+  buildTree,
+  type SceneryAssets,
+} from '../scenery/Scenery';
 import { createRng, range } from '../game/random';
 import type { BuiltRegion } from './Region';
-import type { RegionConfig } from './types';
+import { ROAD_KINDS, type RoadBiome, type RegionConfig } from './types';
 
 /**
  * 区域的渲染层。
@@ -29,6 +40,84 @@ export interface RegionView {
   /** 调试用：把路网中心线与区域边界画出来 */
   setDebugVisible: (visible: boolean) => void;
   dispose: () => void;
+}
+
+type SceneryKind = 'house' | 'conifer' | 'broadleaf' | 'barn' | 'haystack' | 'flower';
+
+/**
+ * 每个 biome 的景观规则。
+ * `inset` 是离**路面边缘**多远（米）；`density` 是命中概率 —— 留白和密度一样重要，
+ * 排满反而假。`align` 为真时朝向对齐道路（房子要正面朝街）。
+ */
+interface BiomeSceneryRule {
+  spacing: number;
+  inset: [number, number];
+  kinds: SceneryKind[];
+  density: number;
+  align: boolean;
+  bothSides: boolean;
+}
+
+const BIOME_RULES: Record<RoadBiome, BiomeSceneryRule> = {
+  // 村庄：房子成排沿街（占多数）+ 少量花丛与树，密、贴街
+  village: {
+    spacing: 16,
+    inset: [6.5, 13],
+    kinds: ['house', 'house', 'house', 'house', 'flower', 'broadleaf'],
+    density: 0.8,
+    align: true,
+    bothSides: true,
+  },
+  urban: { spacing: 14, inset: [7, 15], kinds: ['house', 'house', 'house'], density: 0.88, align: true, bothSides: true },
+  // 林地：几乎贴到路肩的密针叶林
+  forest: {
+    spacing: 7,
+    inset: [3.2, 30],
+    kinds: ['conifer', 'conifer', 'conifer', 'broadleaf'],
+    density: 0.88,
+    align: false,
+    bothSides: true,
+  },
+  // 郊野：稀疏散布，远一点，留出草地
+  meadow: {
+    spacing: 26,
+    inset: [16, 66],
+    kinds: ['broadleaf', 'conifer', 'flower', 'flower'],
+    density: 0.4,
+    align: false,
+    bothSides: true,
+  },
+  // 农田：谷仓/草垛 + 零星树
+  farm: {
+    spacing: 30,
+    inset: [12, 44],
+    kinds: ['barn', 'haystack', 'haystack', 'broadleaf'],
+    density: 0.5,
+    align: false,
+    bothSides: true,
+  },
+};
+
+/** 按种类生成一个景观件。 */
+function buildOne(
+  assets: SceneryAssets,
+  rng: () => number,
+  kind: SceneryKind,
+): THREE.Group {
+  switch (kind) {
+    case 'house':
+      return buildHouse(assets, rng, range(rng, 0.88, 1.3));
+    case 'barn':
+      return buildBarn(assets, rng, range(rng, 0.9, 1.2));
+    case 'haystack':
+      return buildHaystack(assets, rng);
+    case 'flower':
+      return buildFlower(assets, rng);
+    case 'conifer':
+      return buildTree(assets, rng, 'conifer', range(rng, 1.0, 2.0));
+    default:
+      return buildTree(assets, rng, 'broadleaf', range(rng, 0.9, 1.9));
+  }
 }
 
 export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = 'high'): RegionView {
@@ -85,17 +174,30 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
     map: cardboardTexture(0xc2a273, config.seed + 11),
     side: THREE.DoubleSide,
   });
+  // 土路没有马路牙子：路肩与侧壁都是夯实的土/碎石色，不是红色路缘 + 牛皮纸
+  const earthShoulderMat = paperMaterial(0xffffff, {
+    map: dirtTextureFor(config.seed + 3),
+    side: THREE.DoubleSide,
+  });
 
   for (const seg of region.segments) {
-    const isDirt = (seg.config.surface ?? '') === 'dirt';
+    // 路面类型必须从**等级**解析。原来只读 seg.config.surface，而配置里没人写过它，
+    // 于是所有路段（包括 kind:'dirt' 的林道、村道）全都铺了沥青 + 城市车道线。
+    const kindSpec = ROAD_KINDS[seg.config.kind];
+    const surface = seg.config.surface ?? kindSpec.surface;
+    const isDirt = surface !== 'asphalt';
     const surfMat = isDirt ? dirtMat : roadMat;
+    const segKerbMat = isDirt ? earthShoulderMat : kerbMat;
+    // 土路的边坡直接用**地面材质**：土路本该平顺地融进草地，
+    // 用牛皮纸/土色侧壁会在路两侧画出两条深色"排水沟"，看起来像人工沟渠。
+    const segWallMat = isDirt ? vergeMat : wallMat;
     const roadMesh = new THREE.Mesh(ribbonToGeometry(seg.road.road), surfMat);
     roadMesh.receiveShadow = true;
     group.add(roadMesh);
     disposables.push(() => roadMesh.geometry.dispose());
 
     for (const ribbon of [seg.road.kerbLeft, seg.road.kerbRight]) {
-      const m = new THREE.Mesh(ribbonToGeometry(ribbon), kerbMat);
+      const m = new THREE.Mesh(ribbonToGeometry(ribbon), segKerbMat);
       m.receiveShadow = true;
       group.add(m);
       disposables.push(() => m.geometry.dispose());
@@ -108,7 +210,7 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
     }
     // 路肩外的卡纸侧壁（可见的纸板厚度）
     for (const ribbon of [seg.road.wallLeft, seg.road.wallRight]) {
-      const m = new THREE.Mesh(ribbonToGeometry(ribbon), wallMat);
+      const m = new THREE.Mesh(ribbonToGeometry(ribbon), segWallMat);
       m.receiveShadow = true;
       group.add(m);
       disposables.push(() => m.geometry.dispose());
@@ -236,28 +338,97 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
     ridgeMat.dispose();
   });
 
-  // ---------------- S1 轻度景观（S2 会按 biome 补齐） ----------------
-  const treeCount = quality === 'high' ? 260 : 110;
-  const treeGroup = new THREE.Group();
-  for (let i = 0; i < treeCount; i++) {
-    // 沿某条路段随机取点，横向 14~60 m 之外散布
-    const segIdx = Math.floor(rng() * region.segments.length);
-    const curve = region.segments[segIdx].curve;
-    const t = rng();
-    const s = curve.sampleAt(t);
-    const side = rng() > 0.5 ? 1 : -1;
-    const lateral = side * range(rng, s.halfWidth + 14, s.halfWidth + 62);
-    const x = s.x + s.rx * lateral;
-    const z = s.z + s.rz * lateral;
-    // 别摆进别的路段的路面上
-    const near = region.network.project(x, z);
-    if (near.distance < near.halfWidth + 8) continue;
-    const y = region.terrain.heightAt(x, z);
-    const tree = buildTree(assets, rng, rng() > 0.55 ? 'conifer' : 'broadleaf', range(rng, 1.0, 2.1));
-    tree.position.set(x, y, z);
-    treeGroup.add(tree);
+  // ---------------- 景观：按 biome 分块 + 沿路规则摆放 ----------------
+  //
+  // 旧做法是全图均匀随机撒树（还要求离路面 14~60 m），结果林地不像林地、
+  // 村庄一栋房子都没有 —— 这就是"没有设计、只是在凑"的直接体现。
+  // 现在每个 biome 有自己的规则：摆什么、多密、离路多远、朝哪个方向。
+  // 房子必须**成排沿街、正面朝路**，因为现实里建筑是跟着道路长出来的。
+  const scenery = new THREE.Group();
+  const placed: Array<{ x: number; z: number }> = [];
+  const NODE_CAP = quality === 'high' ? 1900 : 800;
+  let nodeCount = 0;
+  let fenceCount = 0;
+
+  for (const seg of region.segments) {
+    if (nodeCount >= NODE_CAP) break;
+    const biome: RoadBiome = seg.config.biome ?? 'meadow';
+    const rule = BIOME_RULES[biome];
+    const curve = seg.curve;
+    const steps = Math.max(1, Math.floor(curve.totalLength / rule.spacing));
+    const isVillage = biome === 'village' || biome === 'urban';
+    let lastHouseSide = 0;
+
+    for (let k = 0; k < steps && nodeCount < NODE_CAP; k++) {
+      const t = (k + 0.5) / steps;
+      const s = curve.sampleAt(t);
+      for (const side of rule.bothSides ? [1, -1] : [1]) {
+        if (rng() > rule.density) continue;
+        const inset = s.halfWidth + range(rng, rule.inset[0], rule.inset[1]);
+        const x = s.x + s.rx * inset * side;
+        const z = s.z + s.rz * inset * side;
+        // 不能压在别的路面上（含路肩）
+        const near = region.network.project(x, z);
+        if (near.distance < near.halfWidth + 3.6) continue;
+        // 路口要留空，否则房子会堵在路口上
+        let blocked = false;
+        for (const j of config.junctions) {
+          if (Math.hypot(x - j.x, z - j.z) < j.radius * 0.75) {
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked) continue;
+        // 排重：别让房子叠在一栋房子上
+        for (const q of placed) {
+          if ((q.x - x) * (q.x - x) + (q.z - z) * (q.z - z) < 7 * 7) {
+            blocked = true;
+            break;
+          }
+        }
+        if (blocked) continue;
+
+        const kind = rule.kinds[Math.floor(rng() * rule.kinds.length)];
+        // 房子正面朝街：局部 +Z 指向道路中心线
+        const faceRoad = Math.atan2(-s.rx * side, -s.rz * side);
+        const heading = rule.align ? faceRoad + range(rng, -0.05, 0.05) : rng() * Math.PI * 2;
+        const y = region.terrain.heightAt(x, z);
+        const node = buildOne(assets, rng, kind);
+        node.position.set(x, y, z);
+        node.rotation.y = heading;
+        node.traverse(obj => {
+          const mesh = obj as THREE.Mesh;
+          if (mesh.isMesh) {
+            mesh.castShadow = quality === 'high';
+            mesh.receiveShadow = true;
+          }
+        });
+        scenery.add(node);
+        placed.push({ x, z });
+        nodeCount++;
+
+        // 村庄：房子临街一侧拉一段篱笆（这就是"路—院—屋"的关系）
+        if (isVillage && kind === 'house' && side !== lastHouseSide && fenceCount < 220) {
+          lastHouseSide = side;
+          const along = Math.min(11, curve.totalLength / Math.max(steps, 1) - 3);
+          if (along > 4) {
+            const fence = buildFenceAlong(
+              assets,
+              rng,
+              x - s.tx * (along / 2),
+              z - s.tz * (along / 2),
+              x + s.tx * (along / 2),
+              z + s.tz * (along / 2),
+              (hx, hz) => region.terrain.heightAt(hx, hz),
+            );
+            scenery.add(fence);
+            fenceCount++;
+          }
+        }
+      }
+    }
   }
-  group.add(treeGroup);
+  group.add(scenery);
 
   // 远景：层叠纸板山丘 + 云
   const centre = {

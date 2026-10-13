@@ -73,6 +73,12 @@ export interface RoadGeometrySpec {
   paperThickness: number;
   /** 是否闭合曲线 */
   closed: boolean;
+  /** 路缘抬升（米）。0 = 无路缘（土路）。缺省 0.055。 */
+  kerbHeight?: number;
+  /** 路面不平整度（米，峰谷幅度）。缺省 0。 */
+  roughness?: number;
+  /** 不平整噪声的种子（每条路一个，缺省 1）。 */
+  roughnessSeed?: number;
   /**
    * 逐采样行的**路堤落点**（米，相对本路路面的下沉量，≤ 0）。
    *
@@ -116,15 +122,48 @@ export function apronInnerLatFor(hw: number, profile: RoadProfile): number {
 
 /** 某条路的走廊半径/路堤伸展范围（米）。 */
 export function apronReachOf(spec: RoadGeometrySpec): number {
-  const p = makeProfile({ width: spec.width, paperThickness: spec.paperThickness });
+  const p = makeProfile(spec);
   return apronInnerLatFor(spec.width / 2, p);
 }
 
-function makeProfile(config: { width: number; paperThickness: number }): RoadProfile {
+/**
+ * 路面不平整噪声：沿路(s) 与横向(lat) 的平滑值噪声，返回约 [-1, 1]。
+ *
+ * 关键是**用 (s, lat) 而不是采样点下标**取值：路面条带、碰撞条带、路肩、路堤
+ * 用的是不同的断面点集合，但只要某个点的 (s, lat) 相同，加上的起伏就完全相同 ——
+ * 因此各条纸带之间不会裂开。
+ */
+export function roadRoughness(s: number, lat: number, seed: number): number {
+  const cs = 7;
+  const cl = 1.6;
+  const i0 = Math.floor(s / cs);
+  const j0 = Math.floor(lat / cl);
+  const fs = s / cs - i0;
+  const fl = lat / cl - j0;
+  const us = fs * fs * (3 - 2 * fs);
+  const ul = fl * fl * (3 - 2 * fl);
+  const h = (i: number, j: number): number => {
+    const v = Math.sin((i + seed * 0.017) * 12.9898 + (j + seed * 0.031) * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  const a = h(i0, j0);
+  const b = h(i0 + 1, j0);
+  const c = h(i0, j0 + 1);
+  const d = h(i0 + 1, j0 + 1);
+  const ab = a + (b - a) * us;
+  const cd = c + (d - c) * us;
+  return (ab + (cd - ab) * ul) * 2 - 1;
+}
+
+function makeProfile(config: {
+  width: number;
+  paperThickness: number;
+  kerbHeight?: number;
+}): RoadProfile {
   return {
     halfWidth: config.width / 2,
     kerbWidth: 0.9,
-    kerbHeight: 0.055,
+    kerbHeight: config.kerbHeight ?? 0.055,
     paperThickness: config.paperThickness,
     crown: 0.004,
     vergeSlopeWidth: 1.4,
@@ -159,6 +198,10 @@ function buildRibbon(
    * 断面点按横向比例从原下沉量插值到 `drops[i]`，形成一条真实边坡。
    */
   ramp?: { from: number; drops: readonly (ApronDrop | undefined)[] },
+  /** 路面不平整度（米） */
+  roughness = 0,
+  /** 不平整噪声种子 */
+  roughSeed = 1,
 ): RibbonData {
   const n = samples.length;
   const p = profile.length;
@@ -175,8 +218,9 @@ function buildRibbon(
       const idx = (i * p + j) * 3;
       // 横向位置用完整的 lateral；高度只用夹紧后的 lateral（超高不外溢）
       const latForY = Math.max(-bankCap, Math.min(bankCap, off.lateral));
-      // 路面之外按横向比例下压：靠路面处贴住路面，到路堤外沿落到邻路高度
+      // 路面不平整：整条断面一起起伏，同时按横向位置给出坑洼差异
       let dy = off.dy;
+      if (roughness > 0) dy += roadRoughness(s.s, off.lateral, roughSeed) * roughness;
       if (ramp) {
         const drop = ramp.drops[i % n];
         const lat = Math.abs(off.lateral);
@@ -263,6 +307,8 @@ export function buildRoadGeometry(
   const u = (lat: number) => (lat + roadHalf) / (2 * roadHalf);
 
   const closed = spec.closed;
+  const rough = spec.roughness ?? 0;
+  const roughSeed = spec.roughnessSeed ?? 1;
 
   const ramp = spec.apronDropRows
     ? { from: hw, drops: spec.apronDropRows }
@@ -275,17 +321,19 @@ export function buildRoadGeometry(
     closed,
     hw,
     ramp,
+    rough,
+    roughSeed,
   );
-  const kerbLeft = buildRibbon(samples, [full[1], full[2]], [0, 1], 3, closed, hw, ramp);
-  const kerbRight = buildRibbon(samples, [full[4], full[5]], [0, 1], 3, closed, hw, ramp);
+  const kerbLeft = buildRibbon(samples, [full[1], full[2]], [0, 1], 3, closed, hw, ramp, rough, roughSeed);
+  const kerbRight = buildRibbon(samples, [full[4], full[5]], [0, 1], 3, closed, hw, ramp, rough, roughSeed);
   // 路堤过渡坡（草地），把路肩外沿平顺接到路堤面
-  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 4, closed, hw, ramp);
-  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 4, closed, hw, ramp);
+  const wallLeft = buildRibbon(samples, [full[0], full[1]], [0, 1], 4, closed, hw, ramp, rough, roughSeed);
+  const wallRight = buildRibbon(samples, [full[5], full[6]], [0, 1], 4, closed, hw, ramp, rough, roughSeed);
 
   // 碰撞面：整个断面（含路肩与过渡坡），连续无孔洞、无台坎。
   // 超高只作用到路面半宽，外侧地面保持水平 —— 这是可驾驶性的关键。
   const collision = toTrimesh(
-    buildRibbon(samples, full, [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1], vRepeat, closed, hw, ramp),
+    buildRibbon(samples, full, [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1], vRepeat, closed, hw, ramp, rough, roughSeed),
   );
   // 路堤：过渡坡外沿 → 平铺纸带 → 收边，形成"纸板赛道压在一张桌子上"的边缘
   const apronOuter = profile.apronDrop;
@@ -314,6 +362,8 @@ export function buildRoadGeometry(
     closed,
     hw,
     ramp,
+    rough,
+    roughSeed,
   );
   const apronRight = buildRibbon(
     samples,
@@ -333,6 +383,8 @@ export function buildRoadGeometry(
     closed,
     hw,
     ramp,
+    rough,
+    roughSeed,
   );
   const apronCollisionBand = [
     { lateral: -(apronInnerLat + apronFar), dy: -apronEnd },
@@ -344,8 +396,8 @@ export function buildRoadGeometry(
     { lateral: apronInnerLat + profile.apronWidth, dy: -apronOuter },
     { lateral: apronInnerLat + apronFar, dy: -apronEnd },
   ];
-  const a1 = toTrimesh(buildRibbon(samples, apronCollisionBand, [0, 0.8, 1], 8, closed, hw, ramp));
-  const a2 = toTrimesh(buildRibbon(samples, apronCollisionBandRight, [0, 0.2, 1], 8, closed, hw, ramp));
+  const a1 = toTrimesh(buildRibbon(samples, apronCollisionBand, [0, 0.8, 1], 8, closed, hw, ramp, rough, roughSeed));
+  const a2 = toTrimesh(buildRibbon(samples, apronCollisionBandRight, [0, 0.2, 1], 8, closed, hw, ramp, rough, roughSeed));
   const apronVerts = new Float32Array(a1.vertices.length + a2.vertices.length);
   apronVerts.set(a1.vertices, 0);
   apronVerts.set(a2.vertices, a1.vertices.length);

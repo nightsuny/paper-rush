@@ -44,6 +44,9 @@ export class RoadNetwork {
   private readonly gridH: number;
   /** 每个格子内保存 [segmentIndex, sampleIndex] 对（交错存放） */
   private readonly grid: number[][];
+  /** 每条路的不平整度（米）与其噪声种子 */
+  private readonly roughness: number[];
+  private readonly roughnessSeed: number[];
   /** 用于跳过 NaN / 空网 */
   readonly totalLength: number;
   readonly bounds: { minX: number; minZ: number; maxX: number; maxZ: number };
@@ -62,6 +65,8 @@ export class RoadNetwork {
       return new Centerline(spec, resolution);
     });
     this.totalLength = this.curves.reduce((a, c) => a + c.totalLength, 0);
+    this.roughness = configs.map((c) => ROAD_KINDS[c.kind].roughness ?? 0);
+    this.roughnessSeed = configs.map((_, i) => i + 1);
 
     // ---- 共享空间索引 ----
     let minX = Infinity;
@@ -107,6 +112,16 @@ export class RoadNetwork {
 
   get segmentCount(): number {
     return this.curves.length;
+  }
+
+  /** 第 i 条路的不平整度（米）。 */
+  roughnessOf(i: number): number {
+    return this.roughness[i] ?? 0;
+  }
+
+  /** 第 i 条路的不平整噪声种子。 */
+  roughnessSeedOf(i: number): number {
+    return this.roughnessSeed[i] ?? 1;
   }
 
   segmentById(id: string): Centerline<RoadSegmentCurve> | undefined {

@@ -77,6 +77,11 @@ export interface TerrainRoadSample {
    * 如果照样挖空，就会在路的尽头挖出一个天坑，车开出去直接掉下去。
    */
   cutDistance: number;
+  /**
+   * 该处路面的不平整量（米）。地形走廊必须与路面**加同一个量**，
+   * 否则土路往下颠的地方，地形会从路面里穿出来。
+   */
+  roadBump: number;
 }
 
 /**
@@ -114,6 +119,7 @@ export function centerlineProjector(centerline: Centerline): TerrainProjector {
         roadY: s.y,
         roadRy: s.ry,
         cutDistance: cutDistanceAt(centerline.samples, p.index, x, z, p.distance, centerline.closed),
+        roadBump: 0,
       };
     },
   };
@@ -225,7 +231,7 @@ export function buildTerrainFromProjector(
       const d = p.distance;
       distances[i + j * cols] = p.cutDistance;
       // 紧贴路面的走廊高度：横向超高只算到路面半宽，再往外是水平地面
-      const nearH = p.roadY + p.bankLateral * p.roadRy - lip;
+      const nearH = p.roadY + p.bankLateral * p.roadRy + p.roadBump - lip;
       const corridor = 1 - smoothstep(flatInner, flatOuter, d);
       // 丘陵：只有离赛道足够远才起伏，避免赛道旁边出现陡坡
       const hillMask = smoothstep(hillsStart, hillsEnd, d);

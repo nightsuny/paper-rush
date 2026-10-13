@@ -749,6 +749,60 @@ export function buildFenceRun(
   return g;
 }
 
+/**
+ * 沿一条**任意走向**的线段摆栅栏（世界坐标，组放在原点）。
+ *
+ * `buildFenceRun` 只沿世界 X 轴、且以 0 为中心铺开，还要把**局部** px 传给
+ * 世界坐标的 heightAt —— 除了原点附近，用它摆出来的栅栏高度都是错的，
+ * 没法沿村道或院墙使用。这个版本按起终点算方向，高度也用世界坐标取。
+ */
+export function buildFenceAlong(
+  assets: SceneryAssets,
+  rng: () => number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+  heightAt: (x: number, z: number) => number,
+  panelSpacing = 1.5,
+): THREE.Group {
+  const g = new THREE.Group();
+  const dx = bx - ax;
+  const dz = bz - az;
+  const len = Math.max(Math.hypot(dx, dz), 0.001);
+  const ux = dx / len;
+  const uz = dz / len;
+  const heading = Math.atan2(ux, uz);
+  const count = Math.max(2, Math.round(len / panelSpacing));
+  const railMat = paperMaterial(0xb98a5c);
+  const px = (i: number): number => ax + ux * ((i - (count - 1) / 2) * panelSpacing);
+  const pz = (i: number): number => az + uz * ((i - (count - 1) / 2) * panelSpacing);
+  for (let i = 0; i < count; i++) {
+    // 每根板各自贴地：长栅栏在坡上才不会一头悬空一头埋进土里
+    const panel = new THREE.Mesh(assets.geometries.fencePanel, assets.materials.houseWood);
+    panel.position.set(px(i), heightAt(px(i), pz(i)), pz(i));
+    panel.rotation.y = heading + range(rng, -0.04, 0.04);
+    panel.castShadow = true;
+    g.add(panel);
+  }
+  for (const y of [0.28, 0.62]) {
+    for (let i = 0; i + 1 < count; i++) {
+      const x0 = px(i);
+      const z0 = pz(i);
+      const x1 = px(i + 1);
+      const z1 = pz(i + 1);
+      const rail = new THREE.Mesh(
+        new THREE.BoxGeometry(panelSpacing * 1.02, 0.06, 0.035),
+        railMat,
+      );
+      rail.position.set((x0 + x1) / 2, (heightAt(x0, z0) + heightAt(x1, z1)) / 2 + y, (z0 + z1) / 2);
+      rail.rotation.y = heading;
+      g.add(rail);
+    }
+  }
+  return g;
+}
+
 /** 弯道箭头牌：一根木柱 + 一块连续箭头纸牌。 */
 export function buildChevronSign(
   theme: TrackTheme,
