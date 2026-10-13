@@ -13,10 +13,12 @@ import {
   buildBarn,
   buildCardboardHills,
   buildCloud,
+  buildCrate,
   buildFenceAlong,
   buildFlower,
   buildHaystack,
   buildHouse,
+  buildPond,
   buildSceneryAssets,
   buildTree,
   type SceneryAssets,
@@ -348,16 +350,16 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
   const placed: Array<{ x: number; z: number }> = [];
   const NODE_CAP = quality === 'high' ? 1900 : 800;
   let nodeCount = 0;
-  let fenceCount = 0;
 
   for (const seg of region.segments) {
     if (nodeCount >= NODE_CAP) break;
     const biome: RoadBiome = seg.config.biome ?? 'meadow';
+    // 村庄/城镇**一律手工摆**（见 config.placements），这里跳过，
+    // 否则程序会往设计好的街景里再随手撒一堆房子。
+    if (biome === 'village' || biome === 'urban') continue;
     const rule = BIOME_RULES[biome];
     const curve = seg.curve;
     const steps = Math.max(1, Math.floor(curve.totalLength / rule.spacing));
-    const isVillage = biome === 'village' || biome === 'urban';
-    let lastHouseSide = 0;
 
     for (let k = 0; k < steps && nodeCount < NODE_CAP; k++) {
       const t = (k + 0.5) / steps;
@@ -407,28 +409,89 @@ export function buildRegionView(region: BuiltRegion, quality: 'high' | 'low' = '
         placed.push({ x, z });
         nodeCount++;
 
-        // 村庄：房子临街一侧拉一段篱笆（这就是"路—院—屋"的关系）
-        if (isVillage && kind === 'house' && side !== lastHouseSide && fenceCount < 220) {
-          lastHouseSide = side;
-          const along = Math.min(11, curve.totalLength / Math.max(steps, 1) - 3);
-          if (along > 4) {
-            const fence = buildFenceAlong(
-              assets,
-              rng,
-              x - s.tx * (along / 2),
-              z - s.tz * (along / 2),
-              x + s.tx * (along / 2),
-              z + s.tz * (along / 2),
-              (hx, hz) => region.terrain.heightAt(hx, hz),
-            );
-            scenery.add(fence);
-            fenceCount++;
-          }
-        }
       }
     }
   }
   group.add(scenery);
+
+  // ---------------- 手工摆放的景观（村庄） ----------------
+  //
+  // 这里不做任何随机：坐标、朝向、尺寸、配色全来自 config.placements 的逐点清单。
+  // 房子之类以自身为原点，直接摆到世界坐标；水塘与栅栏是在**局部坐标**里生成的，
+  // 所以要把世界偏移带进它们的 heightAt，否则贴地高度会全部取到原点附近的地形。
+  const placedGroup = new THREE.Group();
+  const hAt = (x: number, z: number): number => region.terrain.heightAt(x, z);
+  for (const pl of config.placements ?? []) {
+    let node: THREE.Object3D | null = null;
+    switch (pl.kind) {
+      case 'house':
+        node = buildHouse(assets, rng, pl.scale ?? 1, {
+          width: pl.width,
+          depth: pl.depth,
+          height: pl.height,
+          roofHeight: pl.roofHeight,
+          roof: pl.roof,
+          wall: pl.wall,
+          windows: pl.windows,
+          doorOffset: pl.doorOffset,
+          chimney: pl.chimney,
+        });
+        break;
+      case 'shed':
+        node = buildHouse(assets, rng, pl.scale ?? 1, {
+          width: pl.width,
+          depth: pl.depth,
+          height: pl.height,
+          roofHeight: pl.roofHeight,
+          roof: pl.roof,
+          wall: pl.wall,
+          windows: pl.windows,
+          chimney: false,
+        });
+        break;
+      case 'barn':
+        node = buildBarn(assets, rng, pl.scale ?? 1);
+        break;
+      case 'haystack':
+        node = buildHaystack(assets, rng);
+        break;
+      case 'crate':
+        node = buildCrate(theme, config.seed, pl.scale ?? 1.2);
+        break;
+      case 'tree':
+        node = buildTree(assets, rng, pl.tree ?? 'broadleaf', pl.scale ?? 1.4);
+        break;
+      case 'flower':
+        node = buildFlower(assets, rng);
+        break;
+      case 'pond':
+        node = buildPond(rng, pl.radius ?? 8, (lx, lz) => hAt(pl.x + lx, pl.z + lz));
+        break;
+      case 'fence':
+        // buildFenceAlong 直接按世界坐标铺开，所以组要留在原点
+        node = buildFenceAlong(assets, rng, pl.x, pl.z, pl.x2 ?? pl.x, pl.z2 ?? pl.z, hAt);
+        break;
+      default:
+        node = null;
+    }
+    if (!node) continue;
+    if (pl.kind !== 'fence' && pl.kind !== 'pond') {
+      node.position.set(pl.x, hAt(pl.x, pl.z), pl.z);
+    }
+    if (pl.heading !== undefined && pl.kind !== 'fence') node.rotation.y = pl.heading;
+    if (pl.scale !== undefined && (pl.kind === 'tree' || pl.kind === 'flower')) {
+      node.scale.setScalar(pl.scale);
+    }
+    node.traverse(obj => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh) {
+        mesh.castShadow = quality === 'high';
+        mesh.receiveShadow = true;
+      }
+    });
+    placedGroup.add(node);
+  }
+  group.add(placedGroup);
 
   // 远景：层叠纸板山丘 + 云
   const centre = {

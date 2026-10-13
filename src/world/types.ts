@@ -174,12 +174,67 @@ export interface RegionConfig {
   collectibles: CollectibleConfig[];
   timeTrials: TimeTrialConfig[];
   landmarks: LandmarkConfig[];
+  /**
+   * **手工摆放**的景观件：一栋房子、一段院墙、一口水塘……
+   *
+   * 这是村庄的做法：逐点写出来，每一条都带 `note` 说明为什么摆在这里。
+   * 与之相对的"按概率撒"只适合林地/旷野这种**成片**的东西。
+   */
+  placements?: PlacementConfig[];
   /** 出生点 */
   spawn: { segment: string; t: number; lateral?: number };
   seed: number;
   terrainAmplitude: number;
   terrainScale: number;
   paperThickness: number;
+}
+
+/** 手工摆放的景观件种类。 */
+export type PlacementKind =
+  | 'house'
+  | 'barn'
+  | 'shed'
+  | 'haystack'
+  | 'crate'
+  | 'pond'
+  | 'fence'
+  | 'tree'
+  | 'bush'
+  | 'flower';
+
+/**
+ * 一个手工摆放的景观件。
+ *
+ * 坐标是**世界坐标（米）**，不是相对路段的参数 —— 设计村庄时要在脑子里摆位置，
+ * 用"第几条路第几成"这种参数化表达反而看不出布局。
+ */
+export interface PlacementConfig {
+  kind: PlacementKind;
+  x: number;
+  z: number;
+  /** 朝向（弧度）。房子的正面是局部 +Z，所以 heading 决定它面向哪边。 */
+  heading?: number;
+  scale?: number;
+  // --- house ---
+  width?: number;
+  depth?: number;
+  height?: number;
+  roofHeight?: number;
+  roof?: 'slate' | 'tile' | 'thatch';
+  wall?: number;
+  windows?: number;
+  doorOffset?: number;
+  chimney?: boolean;
+  // --- barn / shed / haystack / crate / pond ---
+  /** 圆的半径（pond）或长条的长度（fence） */
+  radius?: number;
+  /** 长条的另一端（fence 专用） */
+  x2?: number;
+  z2?: number;
+  /** 树的品种 */
+  tree?: 'conifer' | 'broadleaf';
+  /** 设计意图：这一件为什么在这里 */
+  note?: string;
 }
 
 /** 区域边界空气墙的厚度（米）。 */

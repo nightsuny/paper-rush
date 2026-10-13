@@ -1,6 +1,12 @@
 import type { ControlPoint } from '../../tracks/types';
 import { gate, link, ring } from '../linkFactory';
-import type { JunctionConfig, LandmarkConfig, RegionConfig, RoadSegmentConfig } from '../types';
+import type {
+  JunctionConfig,
+  LandmarkConfig,
+  PlacementConfig,
+  RegionConfig,
+  RoadSegmentConfig,
+} from '../types';
 
 /**
  * 区域 1「青野乡」——郊野 + 林地 + 村庄。
@@ -284,6 +290,94 @@ const LANDMARKS: LandmarkConfig[] = [
   { kind: 'villageArch', x: S2[0], z: S2[1] + 12, scale: 1.1, heading: 0 },
 ];
 
+/**
+ * 村庄「青野乡」的手工摆放清单。
+ *
+ * **这是逐点设计的，不是程序的产物。** 每一条都能回答"它为什么在这里"：
+ * 主街两侧的住户正面朝街、退线一致；环线外八户农家各自带一间偏房；
+ * 南端是打谷场（谷仓 + 草垛 + 谷斗 + 院墙）；村中心留出一块空地放水塘；
+ * 巷子止于最后一户农家院；村口的花贴着街边，树刻意不成排。
+ *
+ * 相对地，林地/旷野用"人定的范围 + 规则填充"（见 RegionView 的 BIOME_RULES）——
+ * 成片的树没法逐棵手写，但范围与边界是人定的。
+ *
+ * 坐标：VIL=(0,1010)，环线半径 80 m，主街沿 X=0 由 z=930 到 z=1120。
+ */
+const VILLAGE_PLACEMENTS: PlacementConfig[] = [
+    { kind: 'house', x: 9.6, z: 948, heading: -1.5708, width: 5.6, depth: 4.4, height: 2.9, roofHeight: 1.6, windows: 2, doorOffset: 0.2, roof: 'tile', wall: 0xe8dcc0, note: '主街东侧第1户，正面朝街（朝 -X）' },
+    { kind: 'house', x: 9.6, z: 966, heading: -1.5708, width: 4.8, depth: 4.0, height: 2.6, roofHeight: 1.4, windows: 2, doorOffset: -0.3, roof: 'slate', wall: 0xdcc9a6, note: '主街东侧第2户，正面朝街（朝 -X）' },
+    { kind: 'house', x: 9.6, z: 984, heading: -1.5708, width: 6.2, depth: 4.8, height: 3.1, roofHeight: 1.8, windows: 3, doorOffset: 0, roof: 'thatch', wall: 0xe3d3b4, note: '主街东侧第3户，正面朝街（朝 -X）' },
+    { kind: 'house', x: 9.6, z: 1032, heading: -1.5708, width: 5.2, depth: 4.2, height: 2.7, roofHeight: 1.5, windows: 2, doorOffset: 0.35, roof: 'tile', wall: 0xcfc0a0, note: '主街东侧第4户，正面朝街（朝 -X）' },
+    { kind: 'house', x: 9.6, z: 1050, heading: -1.5708, width: 5.8, depth: 4.6, height: 3.0, roofHeight: 1.7, windows: 3, doorOffset: -0.15, roof: 'slate', wall: 0xe6d9bc, note: '主街东侧第5户，正面朝街（朝 -X）' },
+    { kind: 'house', x: 9.6, z: 1068, heading: -1.5708, width: 5.0, depth: 4.1, height: 2.6, roofHeight: 1.4, windows: 2, doorOffset: 0.1, roof: 'tile', wall: 0xe8dcc0, note: '主街东侧第6户，正面朝街（朝 -X）' },
+    { kind: 'house', x: -9.6, z: 956, heading: 1.5708, width: 5.0, depth: 4.1, height: 2.7, roofHeight: 1.5, windows: 2, doorOffset: -0.25, roof: 'thatch', wall: 0xe3d3b4, note: '主街西侧第1户，正面朝街（朝 +X）' },
+    { kind: 'house', x: -9.6, z: 974, heading: 1.5708, width: 5.8, depth: 4.6, height: 3.0, roofHeight: 1.7, windows: 3, doorOffset: 0.1, roof: 'tile', wall: 0xcfc0a0, note: '主街西侧第2户，正面朝街（朝 +X）' },
+    { kind: 'house', x: -9.6, z: 992, heading: 1.5708, width: 4.6, depth: 3.9, height: 2.5, roofHeight: 1.3, windows: 1, doorOffset: 0.4, roof: 'slate', wall: 0xe6d9bc, note: '主街西侧第3户，正面朝街（朝 +X）' },
+    { kind: 'house', x: -9.6, z: 1040, heading: 1.5708, width: 6.0, depth: 4.7, height: 3.1, roofHeight: 1.8, windows: 3, doorOffset: 0, roof: 'tile', wall: 0xe8dcc0, note: '主街西侧第4户，正面朝街（朝 +X）' },
+    { kind: 'house', x: -9.6, z: 1058, heading: 1.5708, width: 5.4, depth: 4.3, height: 2.8, roofHeight: 1.6, windows: 2, doorOffset: 0.2, roof: 'tile', wall: 0xdcc9a6, note: '主街西侧第5户，正面朝街（朝 +X）' },
+    { kind: 'house', x: -9.6, z: 1076, heading: 1.5708, width: 4.9, depth: 4.0, height: 2.6, roofHeight: 1.4, windows: 2, doorOffset: -0.35, roof: 'slate', wall: 0xe3d3b4, note: '主街西侧第6户，正面朝街（朝 +X）' },
+    { kind: 'house', x: 72.5, z: 1043.8, heading: -2.0071, width: 5.2, depth: 4.4, height: 2.8, roofHeight: 1.6, windows: 2, doorOffset: 0.2, roof: 'slate', wall: 0xcfc0a0, note: '环线外 25 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: 78.8, z: 1046.8, heading: -2.0071, width: 3.6, depth: 3.0, height: 2.1, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 25 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: 51.4, z: 1071.3, heading: -2.4435, width: 6.0, depth: 4.4, height: 3.0, roofHeight: 1.7, windows: 2, doorOffset: -0.2, roof: 'thatch', wall: 0xe6d9bc, note: '环线外 50 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: 55.9, z: 1076.7, heading: -2.4435, width: 4.0, depth: 3.0, height: 2.3, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 50 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: -51.4, z: 1071.3, heading: 2.4435, width: 4.8, depth: 4.4, height: 2.6, roofHeight: 1.4, windows: 2, doorOffset: 0.3, roof: 'tile', wall: 0xe8dcc0, note: '环线外 130 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: -55.9, z: 1076.7, heading: 2.4435, width: 3.4, depth: 3.0, height: 2.0, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 130 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: -72.5, z: 1043.8, heading: 2.0071, width: 5.6, depth: 4.4, height: 2.9, roofHeight: 1.6, windows: 2, doorOffset: 0, roof: 'slate', wall: 0xdcc9a6, note: '环线外 155 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: -78.8, z: 1046.8, heading: 2.0071, width: 3.8, depth: 3.0, height: 2.2, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 155 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: -72.5, z: 976.2, heading: 1.1345, width: 5.4, depth: 4.4, height: 2.7, roofHeight: 1.5, windows: 2, doorOffset: -0.3, roof: 'tile', wall: 0xe3d3b4, note: '环线外 205 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: -78.8, z: 973.2, heading: 1.1345, width: 3.6, depth: 3.0, height: 2.1, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 205 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: -51.4, z: 948.7, heading: 0.6981, width: 6.2, depth: 4.4, height: 3.1, roofHeight: 1.8, windows: 2, doorOffset: 0.25, roof: 'tile', wall: 0xcfc0a0, note: '环线外 230 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: -55.9, z: 943.3, heading: 0.6981, width: 4.2, depth: 3.0, height: 2.4, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 230 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: 51.4, z: 948.7, heading: -0.6981, width: 5.0, depth: 4.4, height: 2.6, roofHeight: 1.4, windows: 2, doorOffset: 0.1, roof: 'slate', wall: 0xe6d9bc, note: '环线外 310 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: 55.9, z: 943.3, heading: -0.6981, width: 3.4, depth: 3.0, height: 2.0, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 310 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: 72.5, z: 976.2, heading: -1.1345, width: 5.8, depth: 4.4, height: 2.8, roofHeight: 1.7, windows: 2, doorOffset: -0.1, roof: 'thatch', wall: 0xe8dcc0, note: '环线外 335 度 农家，正面朝环线（向内）' },
+    { kind: 'shed', x: 78.8, z: 973.2, heading: -1.1345, width: 3.8, depth: 3.0, height: 2.2, roofHeight: 1.1, windows: 1, roof: 'thatch', wall: 0xc9b48e, chimney: false, note: '环线外 335 度 农家的偏房（柴房/农具），摆在正屋背后外侧' },
+    { kind: 'house', x: 9.6, z: 878, heading: -1.5708, width: 5.4, depth: 4.3, height: 2.8, roofHeight: 1.5, windows: 2, doorOffset: -0.2, roof: 'slate', wall: 0xe8dcc0, note: '村北进村口第1户（来路东侧）' },
+    { kind: 'house', x: 9.6, z: 896, heading: -1.5708, width: 4.8, depth: 4.3, height: 2.6, roofHeight: 1.4, windows: 2, doorOffset: 0.3, roof: 'tile', wall: 0xdcc9a6, note: '村北进村口第2户（来路东侧）' },
+    { kind: 'house', x: -114, z: 1014, heading: 1.5708, width: 5.0, depth: 4.2, height: 2.7, roofHeight: 1.5, windows: 2, roof: 'thatch', wall: 0xdcc9a6, note: '西巷第1户，正面朝巷' },
+    { kind: 'house', x: -132, z: 1019, heading: 1.5708, width: 4.6, depth: 4.2, height: 2.5, roofHeight: 1.4, windows: 2, roof: 'tile', wall: 0xe3d3b4, note: '西巷第2户，正面朝巷' },
+    { kind: 'house', x: 110, z: 1003, heading: -1.5708, width: 4.8, depth: 4.2, height: 2.6, roofHeight: 1.4, windows: 2, roof: 'slate', wall: 0xe6d9bc, note: '东巷第1户，正面朝巷' },
+    { kind: 'house', x: 130, z: 999, heading: -1.5708, width: 5.4, depth: 4.2, height: 2.8, roofHeight: 1.6, windows: 2, roof: 'tile', wall: 0xe8dcc0, note: '东巷第2户，正面朝巷' },
+    { kind: 'barn', x: 15.5, z: 1108, heading: -1.5708, scale: 1.0, note: '主街南端的谷仓：打谷场的主体建筑，正面朝街' },
+    { kind: 'haystack', x: -10.5, z: 1104, note: '打谷场的草垛第1堆，沿场院边缘堆放' },
+    { kind: 'haystack', x: -10.5, z: 1114, note: '打谷场的草垛第2堆，沿场院边缘堆放' },
+    { kind: 'haystack', x: 12.5, z: 1122, note: '打谷场的草垛第3堆，沿场院边缘堆放' },
+    { kind: 'haystack', x: -16, z: 1119, note: '打谷场的草垛第4堆，沿场院边缘堆放' },
+    { kind: 'crate', x: 7.5, z: 1098, scale: 1.3, note: '打谷场的木箱/谷斗第1个，放在谷仓门旁' },
+    { kind: 'crate', x: -6.5, z: 1100, scale: 1.1, note: '打谷场的木箱/谷斗第2个，放在谷仓门旁' },
+    { kind: 'pond', x: 30, z: 1046, radius: 7.5, note: '村中心的水塘：在环内空地、离街 30 m，给村子一个水面焦点' },
+    { kind: 'fence', x: 9.6, z: 940, x2: 9.6, z2: 958, note: '院墙第1段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: 9.6, z: 958, x2: 9.6, z2: 976, note: '院墙第2段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: -9.6, z: 948, x2: -9.6, z2: 968, note: '院墙第3段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: -9.6, z: 984, x2: -9.6, z2: 1002, note: '院墙第4段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: 9.6, z: 1024, x2: 9.6, z2: 1042, note: '院墙第5段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: 9.6, z: 1060, x2: 9.6, z2: 1078, note: '院墙第6段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: -9.6, z: 1050, x2: -9.6, z2: 1068, note: '院墙第7段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: 6.5, z: 1102, x2: 24.5, z2: 1102, note: '院墙第8段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: 24.5, z: 1102, x2: 24.5, z2: 1122, note: '院墙第9段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'fence', x: 6.5, z: 1094, x2: -18, z2: 1094, note: '院墙第10段：分隔相邻两家的院子，或围住打谷场' },
+    { kind: 'tree', x: 16, z: 940, scale: 1.5, tree: 'broadleaf', note: '村内第1棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: -17, z: 942, scale: 1.2, tree: 'conifer', note: '村内第2棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: 20, z: 1000, scale: 1.6, tree: 'broadleaf', note: '村内第3棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: -20, z: 1024, scale: 1.3, tree: 'broadleaf', note: '村内第4棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: 26, z: 1030, scale: 1.4, tree: 'conifer', note: '村内第5棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: -27, z: 1000, scale: 1.5, tree: 'broadleaf', note: '村内第6棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: 18, z: 1082, scale: 1.2, tree: 'broadleaf', note: '村内第7棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: -19, z: 1084, scale: 1.6, tree: 'conifer', note: '村内第8棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: 34, z: 1072, scale: 1.4, tree: 'broadleaf', note: '村内第9棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: -36, z: 1058, scale: 1.3, tree: 'broadleaf', note: '村内第10棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: 30, z: 972, scale: 1.5, tree: 'conifer', note: '村内第11棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: -33, z: 980, scale: 1.4, tree: 'broadleaf', note: '村内第12棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: 11, z: 1126, scale: 1.2, tree: 'conifer', note: '村内第13棵树（院边/村口），刻意不成排' },
+    { kind: 'tree', x: -14, z: 1128, scale: 1.5, tree: 'broadleaf', note: '村内第14棵树（院边/村口），刻意不成排' },
+    { kind: 'flower', x: 7.0, z: 962, scale: 1.1, note: '第1簇野花：贴着街边/院门口' },
+    { kind: 'flower', x: -7.2, z: 986, scale: 0.9, note: '第2簇野花：贴着街边/院门口' },
+    { kind: 'flower', x: 8.2, z: 1046, scale: 1.2, note: '第3簇野花：贴着街边/院门口' },
+    { kind: 'flower', x: -8.0, z: 1064, scale: 1.0, note: '第4簇野花：贴着街边/院门口' },
+    { kind: 'flower', x: 6.8, z: 880, scale: 1.1, note: '第5簇野花：贴着街边/院门口' },
+    { kind: 'flower', x: -7.0, z: 1090, scale: 0.9, note: '第6簇野花：贴着街边/院门口' },
+];
+
 export const REGION_QINGYE: RegionConfig = {
   id: 'region-1-qingye',
   name: '青野乡',
@@ -316,6 +410,8 @@ export const REGION_QINGYE: RegionConfig = {
   collectibles: [],
   timeTrials: [],
   landmarks: LANDMARKS,
+  // 手工摆放的村庄（逐点设计，见 VILLAGE_PLACEMENTS 的注释）
+  placements: VILLAGE_PLACEMENTS,
   // 出生点放在**村里**而不是空旷的环岛：先让玩家看到的是一处有设计的地方。
   // 等到区域重做成"以村庄为核心的 1 km² 街区"时，这里就是村庄主街。
   spawn: { segment: 'vil-main', t: 0.42, lateral: 0 },

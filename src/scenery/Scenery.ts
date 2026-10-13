@@ -356,20 +356,74 @@ export function buildFlower(assets: SceneryAssets, rng: () => number): THREE.Gro
 }
 
 /** 玩具农舍：纸盒墙体 + 折角屋顶 + 门 + 窗 + 烟囱。 */
-export function buildHouse(assets: SceneryAssets, rng: () => number, scale = 1): THREE.Group {
-  const g = new THREE.Group();
-  const w = range(rng, 4.2, 6.4) * scale;
-  const d = range(rng, 3.4, 5.2) * scale;
-  const h = range(rng, 2.4, 3.2) * scale;
+/**
+ * 房子可指定的参数。
+ *
+ * 不给这些参数时房子完全由 rng 决定 —— 一排排下去就是同一个方盒子。
+ * 手工设计村庄时必须能**逐栋指定**尺寸、屋顶品类与配色，否则只是复制粘贴。
+ * 正面是局部 **+Z**（门和窗都在那一面），因此朝向由外部的 rotation.y 决定。
+ */
+export interface HouseOptions {
+  /** 正面宽度（沿 X） */
+  width?: number;
+  /** 进深（沿 Z） */
+  depth?: number;
+  /** 檐口高（墙高） */
+  height?: number;
+  /** 屋脊高（相对檐口） */
+  roofHeight?: number;
+  /** 屋顶品类：石板 / 红瓦 / 茅草 */
+  roof?: 'slate' | 'tile' | 'thatch';
+  /** 墙色覆盖 */
+  wall?: number;
+  /** 窗子数量 */
+  windows?: number;
+  /** 门在正面横向的偏移（-1..1，相对半宽） */
+  doorOffset?: number;
+  /** 是否带烟囱 */
+  chimney?: boolean;
+}
 
-  const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), assets.materials.houseWall);
+const ROOF_COLORS: Record<'slate' | 'tile' | 'thatch', number> = {
+  slate: 0x4a4a55,
+  tile: 0x9c4a3a,
+  thatch: 0xb08f5f,
+};
+
+const houseMatCache = new Map<string, THREE.Material>();
+
+/** 按颜色缓存纸质材质，避免每栋房子都新建一份。 */
+function cachedHouseMaterial(color: number, seed: number, kind: string): THREE.Material {
+  const key = `${kind}:${color}`;
+  const hit = houseMatCache.get(key);
+  if (hit) return hit;
+  const mat = paperMaterial(color, { map: cardboardTexture(color, seed) });
+  houseMatCache.set(key, mat);
+  return mat;
+}
+
+export function buildHouse(
+  assets: SceneryAssets,
+  rng: () => number,
+  scale = 1,
+  opts: HouseOptions = {},
+): THREE.Group {
+  const g = new THREE.Group();
+  const w = (opts.width ?? range(rng, 4.2, 6.4)) * scale;
+  const d = (opts.depth ?? range(rng, 3.4, 5.2)) * scale;
+  const h = (opts.height ?? range(rng, 2.4, 3.2)) * scale;
+
+  const wallMat = opts.wall === undefined
+    ? assets.materials.houseWall
+    : cachedHouseMaterial(opts.wall, 101, 'wall');
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
   wall.position.y = h / 2;
   wall.castShadow = true;
   g.add(wall);
   addOutline(wall, 0.03, g, assets.materials.outline);
 
   // 屋顶：两片斜纸板
-  const roofH = range(rng, 1.3, 1.9) * scale;
+  const roofH = (opts.roofHeight ?? range(rng, 1.3, 1.9)) * scale;
   const roofGeo = new THREE.BufferGeometry();
   const hw = w / 2 + 0.22 * scale;
   const hd = d / 2 + 0.22 * scale;
@@ -386,7 +440,9 @@ export function buildHouse(assets: SceneryAssets, rng: () => number, scale = 1):
   ];
   roofGeo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   roofGeo.setIndex(idx);
-  const roof = new THREE.Mesh(flat(roofGeo), assets.materials.houseRoof);
+  const roofKind = opts.roof ?? 'slate';
+  const roofMat = cachedHouseMaterial(ROOF_COLORS[roofKind], 97, 'roof');
+  const roof = new THREE.Mesh(flat(roofGeo), roofMat);
   roof.position.y = h;
   roof.castShadow = true;
   g.add(roof);
@@ -394,11 +450,15 @@ export function buildHouse(assets: SceneryAssets, rng: () => number, scale = 1):
 
   // 门
   const door = new THREE.Mesh(new THREE.BoxGeometry(0.9 * scale, 1.7 * scale, 0.1 * scale), assets.materials.houseWood);
-  door.position.set(range(rng, -w / 4, w / 4), 0.85 * scale, d / 2 + 0.02);
+  door.position.set(
+    opts.doorOffset !== undefined ? opts.doorOffset * (w / 2 - 0.6) : range(rng, -w / 4, w / 4),
+    0.85 * scale,
+    d / 2 + 0.02,
+  );
   g.add(door);
 
   // 窗 + 十字窗棂
-  const winCount = 1 + Math.floor(rng() * 2);
+  const winCount = opts.windows ?? 1 + Math.floor(rng() * 2);
   for (let i = 0; i < winCount; i++) {
     const win = new THREE.Mesh(new THREE.BoxGeometry(0.8 * scale, 0.8 * scale, 0.1 * scale), assets.materials.window);
     win.position.set(range(rng, -w / 3, w / 3), h - 0.9 * scale, d / 2 + 0.02);
@@ -413,6 +473,10 @@ export function buildHouse(assets: SceneryAssets, rng: () => number, scale = 1):
   }
 
   // 烟囱
+  if (opts.chimney === false) {
+    g.rotation.y = 0;
+    return g;
+  }
   const chimney = new THREE.Mesh(
     new THREE.BoxGeometry(0.5 * scale, roofH * 0.9, 0.5 * scale),
     assets.materials.houseWood,
@@ -421,7 +485,8 @@ export function buildHouse(assets: SceneryAssets, rng: () => number, scale = 1):
   chimney.castShadow = true;
   g.add(chimney);
 
-  g.rotation.y = rng() * Math.PI * 2;
+  // 手工摆放时朝向由调用者设置，这里**不能**自己随机转，否则设计好的朝向会被覆盖
+  g.rotation.y = 0;
   return g;
 }
 
