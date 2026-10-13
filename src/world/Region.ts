@@ -226,8 +226,22 @@ export class RegionBuilder {
     // ---- 2) 地形：走廊按"到最近任意路段"压平与挖空 ----
     const maxCut = Math.max(...segments.map((s) => s.road.corridorCutRadius));
     const maxHalf = Math.max(...segments.map((s) => s.curve.config.width / 2));
+    // 地形的范围必须覆盖**区域边界**，而不只是路网的包围盒。
+    // 之前地形只按"路网 bbox + margin(170)"生成，而边界可能离最外侧的路更远
+    // （这一版东墙离最东的路有 190 m），于是墙立在地形之外的空处：
+    // 车一路向东会先掉出地形、从墙底下飞过去（实测冲到 227 km/h 越过边界）。
+    const baseProjector = networkProjector(network);
+    const terrainProjector = {
+      sample: (x: number, z: number) => baseProjector.sample(x, z),
+      bounds: {
+        minX: Math.min(baseProjector.bounds.minX, config.bounds.minX),
+        minZ: Math.min(baseProjector.bounds.minZ, config.bounds.minZ),
+        maxX: Math.max(baseProjector.bounds.maxX, config.bounds.maxX),
+        maxZ: Math.max(baseProjector.bounds.maxZ, config.bounds.maxZ),
+      },
+    };
     const terrain = buildTerrainFromProjector(
-      networkProjector(network),
+      terrainProjector,
       {
         terrainAmplitude: config.terrainAmplitude,
         terrainScale: config.terrainScale,
